@@ -32,32 +32,63 @@ window.SCORE = 0;   // persistent across scenes
 // ── Skip button — shown during cinematics, hidden during battle ──
 // Each scene sets window._skipAction to a function; button calls it then updates label.
 window._skipAction = null;
+// ── Skip button — pure HTML element, sits above the canvas, immune to Phaser zoom/scroll ──
+window._skipEl = null;
 window.showSkipButton = function(scene) {
-  if(window._skipBtn && window._skipBtn.active) window._skipBtn.destroy();
-  const {width} = scene.scale;
-  const btn = scene.add.text(width - 28, 22, 'SKIP ›',{
-    fontFamily:'Arial Black', fontSize:'22px', color:'#ffffff',
-    stroke:'#000000', strokeThickness:4, backgroundColor:'#00000066',
-    padding:{left:10,right:10,top:5,bottom:5}
-  }).setOrigin(1,0).setScrollFactor(0).setDepth(9998).setAlpha(0.7)
-    .setInteractive({useHandCursor:true});
-  btn.on('pointerover', ()=>btn.setAlpha(1));
-  btn.on('pointerout',  ()=>btn.setAlpha(0.7));
-  btn.on('pointerdown', ()=>{
+  window.hideSkipButton();
+  const el = document.createElement('button');
+  el.textContent = 'SKIP  ›';
+  el.style.cssText = [
+    'position:fixed',
+    'top:18px',
+    'right:22px',
+    'z-index:99999',
+    'font-family:Arial Black, Arial, sans-serif',
+    'font-size:20px',
+    'font-weight:900',
+    'color:#ffffff',
+    'text-shadow:0 0 8px #66bbff, 0 0 18px #3388ff, 0 0 2px #000',
+    'background:linear-gradient(180deg,#1155cc 0%,#0033aa 100%)',
+    'border:2px solid #66aaff',
+    'border-radius:8px',
+    'padding:8px 20px',
+    'cursor:pointer',
+    'box-shadow:0 0 12px #2266ff88, inset 0 1px 0 #88bbff44',
+    'letter-spacing:1px',
+    'transition:box-shadow 0.15s, background 0.15s',
+    'pointer-events:auto',
+  ].join(';');
+  el.addEventListener('mouseover', ()=>{
+    el.style.background = 'linear-gradient(180deg,#2266ee 0%,#1144cc 100%)';
+    el.style.boxShadow  = '0 0 22px #44aaff, inset 0 1px 0 #88bbff44';
+  });
+  el.addEventListener('mouseout', ()=>{
+    el.style.background = 'linear-gradient(180deg,#1155cc 0%,#0033aa 100%)';
+    el.style.boxShadow  = '0 0 12px #2266ff88, inset 0 1px 0 #88bbff44';
+  });
+  el.addEventListener('click', ()=>{
     if(window._skipAction) window._skipAction();
   });
-  window._skipBtn = btn;
-  scene.events.once('shutdown', ()=>{ if(window._skipBtn===btn) window._skipBtn=null; });
+  // Touch support
+  el.addEventListener('touchend', (e)=>{
+    e.preventDefault();
+    if(window._skipAction) window._skipAction();
+  });
+  document.body.appendChild(el);
+  window._skipEl = el;
+  // Auto-remove on scene shutdown
+  scene.events.once('shutdown', ()=>{ window.hideSkipButton(); });
 };
 window.hideSkipButton = function() {
-  if(window._skipBtn && window._skipBtn.active) window._skipBtn.destroy();
-  window._skipBtn = null;
+  if(window._skipEl && window._skipEl.parentNode)
+    window._skipEl.parentNode.removeChild(window._skipEl);
+  window._skipEl = null;
   window._skipAction = null;
 };
 
 // ── Phaser-native mobile controls ────────────────────────────────────────────
-// Call initMobileControls(scene) in each scene's create() on mobile.
-// Draws joystick + tap zones directly on the Phaser canvas using Phaser pointers.
+window.VPAD_QUEUE = [];   // event queue: 'attack' | 'power' — drained one per update
+
 window.initMobileControls = function(scene) {
   if(!window.IS_MOBILE) return;
 
@@ -66,25 +97,21 @@ window.initMobileControls = function(scene) {
   const DEAD   = 15;
   const RADIUS = 60;
   const MID_X  = W * 0.5;
-  const LONG_PRESS_MS = 500;   // hold this long on right side = power
+  const LONG_MS = 2000;   // 2 seconds hold = power
 
   const gfx = scene.add.graphics().setDepth(9999).setScrollFactor(0);
 
   // ── Joystick state ──
-  let joyActive = false;
-  let joyPtr    = null;
-  let joyOX = 0, joyOY = 0;
+  let joyActive = false, joyPtr = null, joyOX = 0, joyOY = 0;
 
-  // ── Right-side long-press state ──
-  let atkPtr       = null;   // pointer ID holding right zone
-  let atkDownTime  = 0;      // when that pointer went down
-  let atkFired     = false;  // normal attack already fired this press
-  let pwrFired     = false;  // power already fired this press
-  let pwrCharging  = false;  // visual charge indicator
+  // ── Attack button state ──
+  let atkPtr      = null;
+  let atkDownAt   = 0;
+  let pwrFired    = false;
+  let pwrCharging = false;
 
   // ── Auto-fade ──
-  let fadeTimer = null;
-  let alpha = 1;
+  let fadeTimer = null, alpha = 1;
   function resetFade(){
     alpha = 1;
     clearTimeout(fadeTimer);
@@ -96,102 +123,73 @@ window.initMobileControls = function(scene) {
     gfx.clear();
     gfx.setAlpha(alpha);
 
-    // Right hint — larger ring, changes colour when charging
-    const ringCol  = pwrCharging ? 0xffdd44 : 0xffffff;
-    const ringAlph = pwrCharging ? 0.45     : 0.18;
-    gfx.lineStyle(3, ringCol, ringAlph);
-    gfx.strokeCircle(W * 0.80, H * 0.80, 56);
-    gfx.fillStyle(ringCol, pwrCharging ? 0.12 : 0.05);
-    gfx.fillCircle(W * 0.80, H * 0.80, 56);
-
-    // ATK label
-    gfx.fillStyle(0xffffff, pwrCharging ? 0.0 : 0.20);
-    // (skip text — Graphics can't draw text; hint is visual only)
+    // Right button hint
+    const rc = pwrCharging ? 0xffdd44 : 0x88bbff;
+    const ra = pwrCharging ? 0.55     : 0.22;
+    gfx.lineStyle(3, rc, ra);
+    gfx.strokeCircle(W*0.82, H*0.82, 56);
+    gfx.fillStyle(rc, pwrCharging ? 0.18 : 0.07);
+    gfx.fillCircle(W*0.82, H*0.82, 56);
 
     if(!joyActive) return;
-
-    // Joystick base
     gfx.lineStyle(2, 0xffffff, 0.40);
     gfx.strokeCircle(joyOX, joyOY, RADIUS);
     gfx.fillStyle(0xffffff, 0.08);
     gfx.fillCircle(joyOX, joyOY, RADIUS);
-
-    // Thumb dot
-    const tdx = window.VPAD.left ? -RADIUS*0.6 : window.VPAD.right ? RADIUS*0.6 : 0;
-    const tdy = window.VPAD.up   ? -RADIUS*0.6 : window.VPAD.down  ? RADIUS*0.6 : 0;
+    const tdx = window.VPAD.left?-RADIUS*0.6:window.VPAD.right?RADIUS*0.6:0;
+    const tdy = window.VPAD.up  ?-RADIUS*0.6:window.VPAD.down ?RADIUS*0.6:0;
     gfx.fillStyle(0xffffff, 0.55);
-    gfx.fillCircle(joyOX + tdx, joyOY + tdy, 24);
+    gfx.fillCircle(joyOX+tdx, joyOY+tdy, 24);
   }
 
-  // ── Update loop — handles long-press timing ──
   function onUpdate(){
-    if(atkPtr !== null && !pwrFired){
-      const held = scene.time.now - atkDownTime;
-      if(held >= LONG_PRESS_MS){
-        pwrCharging = false;
-        pwrFired    = true;
-        window.VPAD.power = true;
-        // Flag cleared by update() after reading
-      } else if(held > 150){
-        pwrCharging = true;   // show charge colour after brief delay
-      }
+    if(atkPtr === null){ pwrCharging = false; return; }
+    const held = scene.time.now - atkDownAt;
+    if(!pwrFired && held >= LONG_MS){
+      pwrFired    = true;
+      pwrCharging = false;
+      window.VPAD_QUEUE.push('power');
+    } else if(!pwrFired && held > 300){
+      pwrCharging = true;
     }
   }
 
   scene.input.on('pointerdown', function(ptr){
     resetFade();
     if(ptr.x < MID_X){
-      // ── LEFT ZONE — joystick (multitouch: only claim if no joy active) ──
       if(!joyActive){
-        joyActive = true;
-        joyPtr    = ptr.id;
-        joyOX     = ptr.x;
-        joyOY     = ptr.y;
+        joyActive = true; joyPtr = ptr.id;
+        joyOX = ptr.x;    joyOY = ptr.y;
       }
     } else {
-      // ── RIGHT ZONE — attack / long-press power ──
       if(atkPtr === null){
-        atkPtr      = ptr.id;
-        atkDownTime = scene.time.now;
-        atkFired    = false;
-        pwrFired    = false;
+        atkPtr    = ptr.id;
+        atkDownAt = scene.time.now;
+        pwrFired  = false;
         pwrCharging = false;
-        // Only fire attack if cooldown has elapsed (prevents spam chaining)
-        const now = scene.time.now;
-        if(now - window._lastAtkTime > 450){
-          window._lastAtkTime = now;
-          window.VPAD.attack = true;
-          // Flag is cleared by update() after it reads it — not rAF
-          atkFired = true;
-        }
+        // Queue attack immediately on press — no cooldown, no rAF
+        window.VPAD_QUEUE.push('attack');
       }
     }
   });
 
   scene.input.on('pointermove', function(ptr){
-    if(ptr.id === joyPtr){
-      resetFade();
-      const dx = ptr.x - joyOX;
-      const dy = ptr.y - joyOY;
-      window.VPAD.left  = dx < -DEAD;
-      window.VPAD.right = dx >  DEAD;
-      window.VPAD.up    = dy < -DEAD;
-      window.VPAD.down  = dy >  DEAD;
-    }
+    if(ptr.id !== joyPtr) return;
+    resetFade();
+    const dx = ptr.x - joyOX, dy = ptr.y - joyOY;
+    window.VPAD.left  = dx < -DEAD;
+    window.VPAD.right = dx >  DEAD;
+    window.VPAD.up    = dy < -DEAD;
+    window.VPAD.down  = dy >  DEAD;
   });
 
   scene.input.on('pointerup', function(ptr){
     if(ptr.id === joyPtr){
-      joyActive = false;
-      joyPtr    = null;
-      window.VPAD.left  = false;
-      window.VPAD.right = false;
-      window.VPAD.up    = false;
-      window.VPAD.down  = false;
+      joyActive = false; joyPtr = null;
+      window.VPAD.left=window.VPAD.right=window.VPAD.up=window.VPAD.down=false;
     }
     if(ptr.id === atkPtr){
-      atkPtr      = null;
-      pwrCharging = false;
+      atkPtr = null; pwrCharging = false;
     }
   });
 
@@ -199,6 +197,7 @@ window.initMobileControls = function(scene) {
 
   scene.events.once('shutdown', ()=>{
     window.VPAD.left=window.VPAD.right=window.VPAD.up=window.VPAD.down=false;
+    window.VPAD_QUEUE.length = 0;
     clearTimeout(fadeTimer);
     gfx.destroy();
   });
@@ -481,33 +480,47 @@ class GameScene extends Phaser.Scene {
 
   createScoreDisplay(){
     const {width}=this.scale;
-    this._scoreLabel=this.add.text(width-24,12,'',{
-      fontFamily:'Arial Black',fontSize:'28px',color:'#ffee00',
-      stroke:'#000000',strokeThickness:5,align:'right'
+    this._scoreLabel=this.add.text(width-28,16,'0000000',{
+      fontFamily:'"Arial Black",Arial,sans-serif',
+      fontSize:'52px',
+      color:'#ffee00',
+      stroke:'#ffffff',
+      strokeThickness:6,
+      align:'right',
+      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:18,fill:true}
     }).setOrigin(1,0).setScrollFactor(0).setDepth(5000);
+    this._scoreSwelling = false;
     this._updateScoreDisplay();
   }
 
   _updateScoreDisplay(){
     if(!this._scoreLabel||!this._scoreLabel.active) return;
-    const s=window.SCORE;
-    const str=s.toString().replace(/\B(?=(\d{3})+(?!\d))/g,',');
-    this._scoreLabel.setText(str.padStart(8,'0').replace(/^0+/,m=>m.replace(/0/g,'0')));
-    // Arcade style: leading zeros in dim colour via just padding
-    this._scoreLabel.setText(String(s).padStart(7,'0'));
+    this._scoreLabel.setText(String(window.SCORE).padStart(7,'0'));
   }
 
   addScore(pts, x, y){
     window.SCORE += pts;
     this._updateScoreDisplay();
+    // Swell animation on the score label
+    if(!this._scoreSwelling){
+      this._scoreSwelling = true;
+      this.tweens.add({
+        targets: this._scoreLabel,
+        scaleX: 1.35, scaleY: 1.35,
+        duration: 120, ease:'Sine.Out',
+        yoyo: true,
+        onComplete: ()=>{ this._scoreSwelling=false; this._scoreLabel.setScale(1); }
+      });
+    }
     // Floating points label
     const col = pts>=500?'#ff6644':pts>=200?'#ffdd00':'#aaffaa';
     const lbl=this.add.text(x, y-20, '+'+pts,{
-      fontFamily:'Arial Black',fontSize:'26px',color:col,
-      stroke:'#000000',strokeThickness:4
+      fontFamily:'"Arial Black",Arial,sans-serif',
+      fontSize:'32px',color:col,
+      stroke:'#000000',strokeThickness:5
     }).setOrigin(0.5,1).setDepth(4000).setScrollFactor(1);
     this.tweens.add({
-      targets:lbl, y:lbl.y-70, alpha:0, duration:1100,
+      targets:lbl, y:lbl.y-90, alpha:0, duration:1200,
       ease:'Sine.Out', onComplete:()=>lbl.destroy()
     });
   }
@@ -1413,8 +1426,10 @@ class GameScene extends Phaser.Scene {
     }
 
     /* ── Chase attack F ── */
-    const _atkNow=window.IS_MOBILE?window.VPAD.attack:Phaser.Input.Keyboard.JustDown(this.attackKey);
-    if(window.IS_MOBILE) window.VPAD.attack=false;
+    // Drain one event from queue per frame (mobile) or read JustDown (desktop)
+    const _mobileEvt = window.IS_MOBILE ? (window.VPAD_QUEUE.shift()||null) : null;
+    const _atkNow = window.IS_MOBILE ? _mobileEvt==='attack' : Phaser.Input.Keyboard.JustDown(this.attackKey);
+    const _pwrQueued = window.IS_MOBILE ? _mobileEvt==='power' : false;
     if(!this.cutsceneActive&&_atkNow&&!this.isAttacking){
       this.isAttacking=true;
       this.hero.setTexture('hero_attack').play('hero-attack');
@@ -1427,8 +1442,7 @@ class GameScene extends Phaser.Scene {
     }
 
     /* ── Power G ── */
-    const _pwrNow=window.IS_MOBILE?window.VPAD.power:Phaser.Input.Keyboard.JustDown(this.powerKey);
-    if(window.IS_MOBILE) window.VPAD.power=false;
+    const _pwrNow = window.IS_MOBILE ? _pwrQueued : Phaser.Input.Keyboard.JustDown(this.powerKey);
     if(!this.cutsceneActive&&_pwrNow){
       if(this.heroPower>=this.heroPowerMax) this.firePowerBlast();
       else { this.powerHint.setColor('#ff3333'); this.time.delayedCall(350,()=>this.powerHint.setColor('#335577')); }
