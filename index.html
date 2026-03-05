@@ -487,16 +487,16 @@ class GameScene extends Phaser.Scene {
   }
 
   createScoreDisplay(){
-    const {width,height}=this.scale;
-    this._scoreLabel=this.add.text(width-20,height-20,'0000000',{
+    const {width}=this.scale;
+    this._scoreLabel=this.add.text(width-20,58,'0000000',{
       fontFamily:'"Arial Black",Arial,sans-serif',
-      fontSize:'38px',
+      fontSize:'48px',
       color:'#ffee00',
       stroke:'#000000',
-      strokeThickness:5,
+      strokeThickness:6,
       align:'right',
-      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:14,fill:true}
-    }).setOrigin(1,1).setScrollFactor(0).setDepth(5000);
+      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:18,fill:true}
+    }).setOrigin(1,0).setScrollFactor(0).setDepth(5000);
     this._scoreSwelling = false;
     this._updateScoreDisplay();
   }
