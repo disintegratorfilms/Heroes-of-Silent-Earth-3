@@ -912,34 +912,34 @@ class GameScene extends Phaser.Scene {
   // Show a speech bubble attached above a sprite's head (world space)
   // sprite: the Phaser sprite to attach to
   showDialogue(speaker, text, sprite, onDone, duration=3000){
-    const pad=16;
-    const bubbleW=420;
-    const lineH=24;
-    const charsPerLine=Math.floor((bubbleW-pad*2)/11);
+    const pad=22;
+    const bubbleW=560;
+    const lineH=32;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/14);
     const rawLines=text.split('\n');
     let totalLines=0;
     rawLines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
-    const bubbleH=pad*2 + 24 + totalLines*lineH;
+    const bubbleH=pad*2 + 34 + totalLines*lineH;
 
     // We use world-space objects that scroll with the camera
     // Anchor bubble bottom-center above character's head
     const headClearance=80; // pixels above sprite center
 
-    const bg=this.add.rectangle(0,0, bubbleW, bubbleH, 0xffffff, 0.95)
-      .setStrokeStyle(3, 0x222244).setOrigin(0.5, 1).setDepth(2099);
+    const bg=this.add.rectangle(0,0, bubbleW, bubbleH, 0xffffff, 0.97)
+      .setStrokeStyle(4, 0x222244).setOrigin(0.5, 1).setDepth(2099);
 
     // Tail triangle pointing DOWN (toward the character)
-    const tail=this.add.triangle(0,0, -10,0, 10,0, 0,16, 0xffffff,0.95)
+    const tail=this.add.triangle(0,0, -12,0, 12,0, 0,20, 0xffffff,0.97)
       .setDepth(2098);
 
     // Speaker name — bold blue
     const nameT=this.add.text(0, 0, speaker+':',
-      {fontFamily:'Arial Black', fontSize:'16px', color:'#003399'}
+      {fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'22px', fontStyle:'bold', color:'#003399'}
     ).setOrigin(0.5, 0).setDepth(2100);
 
     // Body text
     const bodyT=this.add.text(0, 0, '"'+text+'"',
-      {fontFamily:'Arial', fontSize:'17px', color:'#111111',
+      {fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'22px', fontStyle:'bold', color:'#111111',
        wordWrap:{width:bubbleW-pad*2}, align:'left'}
     ).setOrigin(0.5, 0).setDepth(2100);
 
@@ -955,7 +955,7 @@ class GameScene extends Phaser.Scene {
       bg.setPosition(bx, by);
       tail.setPosition(bx, by); // tail sits at bottom of bubble
       nameT.setPosition(bx, by - bubbleH + pad + 8);
-      bodyT.setPosition(bx, by - bubbleH + pad + 8 + 24);
+      bodyT.setPosition(bx, by - bubbleH + pad + 8 + 34);
     };
     updatePos();
     // Register as a tracked bubble so update() can reposition it
@@ -1921,27 +1921,28 @@ class CloseupScene extends Phaser.Scene {
     this._killCurrentBubble();
 
     const {width,height}=this.scale;
-    const pad=18, bubbleW=460, lineH=26;
-    const charsPerLine=Math.floor((bubbleW-pad*2)/11);
+    const pad=24, bubbleW=560, lineH=36;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/14);
     const lines=text.split('\n');
     let totalLines=0;
     lines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
-    const bubbleH=pad*2+totalLines*lineH+16;
+    const bubbleH=pad*2+totalLines*lineH+20;
 
     const bx=this.claudio.x+50;
     const by=this.claudio.y - this.claudio.displayHeight*0.6 - 20;
 
     const dots=[];
     for(let d=0;d<3;d++){
-      const dr=5-d*1.4;
-      const dot=this.add.circle(bx-10+d*10, by+bubbleH/2+8+d*14, dr, 0xffffff,0.92).setDepth(2101);
+      const dr=7-d*1.8;
+      const dot=this.add.circle(bx-14+d*14, by+bubbleH/2+10+d*18, dr, 0xffffff,0.92).setDepth(2101);
       dots.push(dot);
     }
 
-    const bg=this.add.rectangle(bx,by,bubbleW,bubbleH,0xffffff,0.93)
-      .setStrokeStyle(3,0x334466).setOrigin(0.5,1).setDepth(2100);
+    const bg=this.add.rectangle(bx,by,bubbleW,bubbleH,0xffffff,0.95)
+      .setStrokeStyle(4,0x334466).setOrigin(0.5,1).setDepth(2100);
     const txt=this.add.text(bx,by-bubbleH+pad,text,{
-      fontFamily:'Georgia,serif', fontSize:'20px', color:'#111133',
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'26px', fontStyle:'bold', color:'#111133',
+      stroke:'#ffffff', strokeThickness:1,
       wordWrap:{width:bubbleW-pad*2}, align:'left'
     }).setOrigin(0.5,0).setDepth(2102);
 
