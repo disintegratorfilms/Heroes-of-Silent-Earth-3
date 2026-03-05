@@ -326,12 +326,17 @@ class GameScene extends Phaser.Scene {
       this.isAttacking=false; this.hero.setTexture('hero_walk').setFrame(0);
     });
     this.cameras.main.startFollow(this.hero,true,0.08,0.08);
-    // Stop everything (crowing from Claudio scenes, any leftover sounds)
-    this.sound.getAll().forEach(s=>{ if(s.isPlaying) s.stop(); });
-    // Start InKeeping fresh
-    this.music=this.sound.add('theme',{loop:true,volume:0});
-    this.music.play();
-    this.tweens.add({targets:this.music, volume:0.66, duration:1500});
+    // Stop everything EXCEPT the theme (preserve music across level transitions)
+    this.sound.getAll().forEach(s=>{ if(s.isPlaying && s.key!=='theme') s.stop(); });
+    // If music is already playing (level 2 restart), keep it going; otherwise start fresh
+    if(this.music && this.music.isPlaying){
+      // already running — just ensure volume is right
+      this.music.setVolume(0.66);
+    } else {
+      this.music=this.sound.add('theme',{loop:true,volume:0});
+      this.music.play();
+      this.tweens.add({targets:this.music, volume:0.66, duration:1500});
+    }
     this.heroMinX=40; this.heroMaxX=this.worldWidth-40;
     this.heroMinY=height*0.60; this.heroMaxY=height*0.91;
 
@@ -873,7 +878,7 @@ class GameScene extends Phaser.Scene {
   spawnEnemyFireball(enemy){
     if(!enemy.active) return;
     const dir=Math.sign(this.hero.x-enemy.x)||1;
-    const fb=this.add.sprite(enemy.x+dir*40,enemy.y,'enemy_fireball').setScale(2).setDepth(100);
+    const fb=this.add.sprite(enemy.x+dir*40,enemy.y,'enemy_fireball').setScale(2).setDepth(100).setFlipX(dir<0);
     fb.play('enemy-fireball-fly'); fb.vx=dir*420; fb.startX=fb.x; fb.maxRange=640;
     this.enemyFireballs.add(fb);
   }
