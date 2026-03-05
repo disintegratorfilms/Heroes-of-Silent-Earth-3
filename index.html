@@ -31,22 +31,28 @@ window.VPAD = { left:false, right:false, up:false, down:false, attack:false, pow
 window.initMobileControls = function(scene) {
   if(!window.IS_MOBILE) return;
 
-  const W = scene.scale.width;
-  const H = scene.scale.height;
+  const W      = scene.scale.width;
+  const H      = scene.scale.height;
   const DEAD   = 15;
-  const RADIUS = 55;
+  const RADIUS = 60;
   const MID_X  = W * 0.5;
+  const LONG_PRESS_MS = 500;   // hold this long on right side = power
 
-  // Graphics for joystick visual
   const gfx = scene.add.graphics().setDepth(9999).setScrollFactor(0);
 
-  let joyActive  = false;
-  let joyPtr     = null;
+  // ── Joystick state ──
+  let joyActive = false;
+  let joyPtr    = null;
   let joyOX = 0, joyOY = 0;
-  let lastTap    = 0;
-  const DOUBLE_TAP = 300;
 
-  // Auto-fade
+  // ── Right-side long-press state ──
+  let atkPtr       = null;   // pointer ID holding right zone
+  let atkDownTime  = 0;      // when that pointer went down
+  let atkFired     = false;  // normal attack already fired this press
+  let pwrFired     = false;  // power already fired this press
+  let pwrCharging  = false;  // visual charge indicator
+
+  // ── Auto-fade ──
   let fadeTimer = null;
   let alpha = 1;
   function resetFade(){
@@ -60,31 +66,52 @@ window.initMobileControls = function(scene) {
     gfx.clear();
     gfx.setAlpha(alpha);
 
-    // Hint ring — right side
-    gfx.lineStyle(2, 0xffffff, 0.15);
-    gfx.strokeCircle(W * 0.82, H * 0.82, 44);
-    gfx.fillStyle(0xffffff, 0.06);
-    gfx.fillCircle(W * 0.82, H * 0.82, 44);
+    // Right hint — larger ring, changes colour when charging
+    const ringCol  = pwrCharging ? 0xffdd44 : 0xffffff;
+    const ringAlph = pwrCharging ? 0.45     : 0.18;
+    gfx.lineStyle(3, ringCol, ringAlph);
+    gfx.strokeCircle(W * 0.80, H * 0.80, 56);
+    gfx.fillStyle(ringCol, pwrCharging ? 0.12 : 0.05);
+    gfx.fillCircle(W * 0.80, H * 0.80, 56);
+
+    // ATK label
+    gfx.fillStyle(0xffffff, pwrCharging ? 0.0 : 0.20);
+    // (skip text — Graphics can't draw text; hint is visual only)
 
     if(!joyActive) return;
 
     // Joystick base
-    gfx.lineStyle(2, 0xffffff, 0.35);
+    gfx.lineStyle(2, 0xffffff, 0.40);
     gfx.strokeCircle(joyOX, joyOY, RADIUS);
     gfx.fillStyle(0xffffff, 0.08);
     gfx.fillCircle(joyOX, joyOY, RADIUS);
 
-    // Thumb
-    const dx = window.VPAD.left ? -RADIUS*0.6 : window.VPAD.right ? RADIUS*0.6 : 0;
-    const dy = window.VPAD.up   ? -RADIUS*0.6 : window.VPAD.down  ? RADIUS*0.6 : 0;
-    gfx.fillStyle(0xffffff, 0.45);
-    gfx.fillCircle(joyOX + dx, joyOY + dy, 22);
+    // Thumb dot
+    const tdx = window.VPAD.left ? -RADIUS*0.6 : window.VPAD.right ? RADIUS*0.6 : 0;
+    const tdy = window.VPAD.up   ? -RADIUS*0.6 : window.VPAD.down  ? RADIUS*0.6 : 0;
+    gfx.fillStyle(0xffffff, 0.55);
+    gfx.fillCircle(joyOX + tdx, joyOY + tdy, 24);
+  }
+
+  // ── Update loop — handles long-press timing ──
+  function onUpdate(){
+    if(atkPtr !== null && !pwrFired){
+      const held = scene.time.now - atkDownTime;
+      if(held >= LONG_PRESS_MS){
+        pwrCharging = false;
+        pwrFired    = true;
+        window.VPAD.power = true;
+        requestAnimationFrame(()=>{ window.VPAD.power = false; });
+      } else if(held > 150){
+        pwrCharging = true;   // show charge colour after brief delay
+      }
+    }
   }
 
   scene.input.on('pointerdown', function(ptr){
     resetFade();
     if(ptr.x < MID_X){
-      // LEFT ZONE — joystick
+      // ── LEFT ZONE — joystick (multitouch: only claim if no joy active) ──
       if(!joyActive){
         joyActive = true;
         joyPtr    = ptr.id;
@@ -92,31 +119,31 @@ window.initMobileControls = function(scene) {
         joyOY     = ptr.y;
       }
     } else {
-      // RIGHT ZONE — tap or double-tap
-      const now = Date.now();
-      if(now - lastTap < DOUBLE_TAP){
-        // Double tap = power
-        window.VPAD.power = true;
-        requestAnimationFrame(()=>{ window.VPAD.power = false; });
-        lastTap = 0;
-      } else {
-        // Single tap = attack
+      // ── RIGHT ZONE — attack / long-press power ──
+      if(atkPtr === null){
+        atkPtr      = ptr.id;
+        atkDownTime = scene.time.now;
+        atkFired    = false;
+        pwrFired    = false;
+        pwrCharging = false;
+        // Fire attack immediately on press (instant response feel)
         window.VPAD.attack = true;
         requestAnimationFrame(()=>{ window.VPAD.attack = false; });
-        lastTap = now;
+        atkFired = true;
       }
     }
   });
 
   scene.input.on('pointermove', function(ptr){
-    if(!joyActive || ptr.id !== joyPtr) return;
-    resetFade();
-    const dx = ptr.x - joyOX;
-    const dy = ptr.y - joyOY;
-    window.VPAD.left  = dx < -DEAD;
-    window.VPAD.right = dx >  DEAD;
-    window.VPAD.up    = dy < -DEAD;
-    window.VPAD.down  = dy >  DEAD;
+    if(ptr.id === joyPtr){
+      resetFade();
+      const dx = ptr.x - joyOX;
+      const dy = ptr.y - joyOY;
+      window.VPAD.left  = dx < -DEAD;
+      window.VPAD.right = dx >  DEAD;
+      window.VPAD.up    = dy < -DEAD;
+      window.VPAD.down  = dy >  DEAD;
+    }
   });
 
   scene.input.on('pointerup', function(ptr){
@@ -128,12 +155,14 @@ window.initMobileControls = function(scene) {
       window.VPAD.up    = false;
       window.VPAD.down  = false;
     }
+    if(ptr.id === atkPtr){
+      atkPtr      = null;
+      pwrCharging = false;
+    }
   });
 
-  // Draw every frame
-  scene.events.on('update', drawJoy);
+  scene.events.on('update', ()=>{ drawJoy(); onUpdate(); });
 
-  // Clean up on scene shutdown
   scene.events.once('shutdown', ()=>{
     window.VPAD.left=window.VPAD.right=window.VPAD.up=window.VPAD.down=false;
     clearTimeout(fadeTimer);
@@ -539,7 +568,7 @@ class GameScene extends Phaser.Scene {
     const ring=this.add.circle(this.hero.x,this.hero.y,10,0xffffff,0).setStrokeStyle(6,0x00aaff).setDepth(901);
     this.tweens.add({targets:ring,scaleX:30,scaleY:30,alpha:0,duration:500,onComplete:()=>ring.destroy()});
     this.cameras.main.shake(500,0.028);
-    this.enemies.forEach(e=>{ if(!e.active||e.dead) return; e.dead=true; e.healthBars.forEach(b=>b.destroy()); this.explode(e.x,e.y,false); e.setTexture('enemy_death').setFrame(6); });
+    this.enemies.forEach(e=>{ if(!e.active||e.dead) return; e.dead=true; e.healthBars.forEach(b=>b.destroy()); this.explode(e.x,e.y,false); e.anims.stop(); e.setTexture('enemy_death').setFrame(6); });
     this.enemyFireballs.clear(true,true);
   }
 
@@ -1169,37 +1198,48 @@ class GameScene extends Phaser.Scene {
           });
 
 
-          // ── PHASE 6: TRIUMPH → YOU WIN ──
+          // ── PHASE 6: TRIUMPH ──
           this.time.delayedCall(1200,()=>{
             const tFlash=this.add.rectangle(width/2,height/2,width,height,0xffffff)
               .setAlpha(0).setDepth(3000).setScrollFactor(0);
             this.tweens.add({targets:tFlash,alpha:0.9,duration:220,yoyo:true,repeat:1,
               onComplete:()=>{
                 tFlash.destroy();
-                const winText=this.add.text(width/2,height/2-90,'THE PRISE CEREMONY\nIS COMPLETE',{
-                  fontFamily:'Arial Black',fontSize:'88px',color:'#ffdd44',
-                  stroke:'#000000',strokeThickness:10,align:'center'
-                }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
-                this.tweens.add({targets:winText,alpha:1,duration:500,ease:'Back.Out'});
-                const subText=this.add.text(width/2,height/2+90,'Chase has won.',{
-                  fontFamily:'Arial Black',fontSize:'44px',color:'#aaddff',
-                  stroke:'#000000',strokeThickness:6
-                }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
-                this.tweens.add({targets:subText,alpha:1,duration:700,delay:500});
                 if(this.music&&this.music.isPlaying)
-                  this.tweens.add({targets:this.music,volume:1.0,duration:500,yoyo:true,hold:1400,delay:300});
-                this.time.delayedCall(3000,()=>{
-                  const playAgain=this.add.text(width/2,height/2+200,'— Play Again —',{
-                    fontFamily:'Arial Black',fontSize:'36px',color:'#ffffff',
-                    stroke:'#000000',strokeThickness:5
-                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3002).setAlpha(0)
-                    .setInteractive({useHandCursor:true});
-                  this.tweens.add({targets:playAgain,alpha:1,duration:600});
-                  playAgain.on('pointerover',()=>playAgain.setColor('#ffdd44'));
-                  playAgain.on('pointerout', ()=>playAgain.setColor('#ffffff'));
-                  playAgain.on('pointerdown',()=>{
-                    if(this.music&&this.music.isPlaying) this.music.stop();
-                    this.scene.start('TitleScene');
+                  this.tweens.add({targets:this.music,volume:1.0,duration:500,yoyo:true,hold:2600,delay:200});
+                // Line 1
+                const vishual=this.add.text(width/2,height/2-60,'The Vishual...',{
+                  fontFamily:'Arial Black',fontSize:'72px',color:'#aaddff',
+                  stroke:'#000000',strokeThickness:8,align:'center'
+                }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
+                this.tweens.add({targets:vishual,alpha:1,duration:600,ease:'Sine.Out'});
+                // Line 2 after 2.8s
+                this.time.delayedCall(2800,()=>{
+                  this.tweens.add({targets:vishual,alpha:0,duration:500,
+                    onComplete:()=>vishual.destroy()});
+                  const vision=this.add.text(width/2,height/2-60,'THE VISION\\nTHAT BEARS THE GIFT!',{
+                    fontFamily:'Arial Black',fontSize:'88px',color:'#ffdd44',
+                    stroke:'#000000',strokeThickness:10,align:'center'
+                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
+                  this.tweens.add({targets:vision,alpha:1,duration:500,ease:'Back.Out'});
+                  // Fade vision after 3.2s, show Play Again
+                  this.time.delayedCall(3200,()=>{
+                    this.tweens.add({targets:vision,alpha:0,duration:600,
+                      onComplete:()=>vision.destroy()});
+                  });
+                  this.time.delayedCall(4000,()=>{
+                    const playAgain=this.add.text(width/2,height/2+200,'— Play Again —',{
+                      fontFamily:'Arial Black',fontSize:'36px',color:'#ffffff',
+                      stroke:'#000000',strokeThickness:5
+                    }).setOrigin(0.5).setScrollFactor(0).setDepth(3002).setAlpha(0)
+                      .setInteractive({useHandCursor:true});
+                    this.tweens.add({targets:playAgain,alpha:1,duration:600});
+                    playAgain.on('pointerover',()=>playAgain.setColor('#ffdd44'));
+                    playAgain.on('pointerout', ()=>playAgain.setColor('#ffffff'));
+                    playAgain.on('pointerdown',()=>{
+                      if(this.music&&this.music.isPlaying) this.music.stop();
+                      this.scene.start('TitleScene');
+                    });
                   });
                 });
               }
@@ -1209,6 +1249,8 @@ class GameScene extends Phaser.Scene {
       });
     });
   }
+
+
 
 
   // Called from update() to animate lightning arcs each frame
