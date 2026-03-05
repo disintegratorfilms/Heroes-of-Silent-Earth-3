@@ -18,6 +18,13 @@
 html,body{ margin:0; padding:0; width:100%; height:100%; background:black; overflow:hidden; }
 canvas{ display:block; image-rendering:pixelated; }
 </style>
+<style>
+#game-skip-btn {
+  touch-action: manipulation !important;
+  -webkit-touch-callout: none !important;
+  pointer-events: auto !important;
+}
+</style>
 </head>
 <body>
 <script>
@@ -32,57 +39,58 @@ window.SCORE = 0;   // persistent across scenes
 // ── Skip button — shown during cinematics, hidden during battle ──
 // Each scene sets window._skipAction to a function; button calls it then updates label.
 window._skipAction = null;
-// ── Skip button — pure HTML element, sits above the canvas, immune to Phaser zoom/scroll ──
+// ── Skip button — pure HTML element above canvas, mobile-safe ──
 window._skipEl = null;
 window.showSkipButton = function(scene) {
   window.hideSkipButton();
-  const el = document.createElement('button');
+  const el = document.createElement('div');  // div not button — avoids iOS button suppression
+  el.id = 'game-skip-btn';
   el.textContent = 'SKIP  ›';
-  el.style.cssText = [
-    'position:fixed',
-    'top:18px',
-    'right:22px',
-    'z-index:99999',
-    'font-family:Arial Black, Arial, sans-serif',
-    'font-size:20px',
-    'font-weight:900',
-    'color:#ffffff',
-    'text-shadow:0 0 8px #66bbff, 0 0 18px #3388ff, 0 0 2px #000',
-    'background:linear-gradient(180deg,#1155cc 0%,#0033aa 100%)',
-    'border:2px solid #66aaff',
-    'border-radius:8px',
-    'padding:8px 20px',
-    'cursor:pointer',
-    'box-shadow:0 0 12px #2266ff88, inset 0 1px 0 #88bbff44',
-    'letter-spacing:1px',
-    'transition:box-shadow 0.15s, background 0.15s',
-    'pointer-events:auto',
-  ].join(';');
-  el.addEventListener('mouseover', ()=>{
-    el.style.background = 'linear-gradient(180deg,#2266ee 0%,#1144cc 100%)';
-    el.style.boxShadow  = '0 0 22px #44aaff, inset 0 1px 0 #88bbff44';
-  });
-  el.addEventListener('mouseout', ()=>{
-    el.style.background = 'linear-gradient(180deg,#1155cc 0%,#0033aa 100%)';
-    el.style.boxShadow  = '0 0 12px #2266ff88, inset 0 1px 0 #88bbff44';
-  });
+  // Use inline style properties individually for maximum compatibility
+  const s = el.style;
+  s.position         = 'fixed';
+  s.top              = '14px';
+  s.right            = '14px';
+  s.zIndex           = '999999';
+  s.fontFamily       = '"Arial Black", Arial, sans-serif';
+  s.fontSize         = '24px';
+  s.fontWeight       = '900';
+  s.color            = '#ffffff';
+  s.textShadow       = '0 0 8px #66bbff, 0 0 18px #3388ff, 0 0 2px #000';
+  s.background       = 'linear-gradient(180deg,#1155cc 0%,#0033aa 100%)';
+  s.border           = '2px solid #88ccff';
+  s.borderRadius     = '10px';
+  s.padding          = '12px 26px';
+  s.cursor           = 'pointer';
+  s.boxShadow        = '0 0 14px #2266ff99, inset 0 1px 0 #88bbff44';
+  s.letterSpacing    = '1px';
+  s.userSelect       = 'none';
+  s.webkitUserSelect = 'none';
+  s.touchAction      = 'manipulation';  // prevents double-tap zoom, allows tap
+  s.webkitTapHighlightColor = 'transparent';
+  s.minWidth         = '80px';
+  s.textAlign        = 'center';
+  s.lineHeight       = '1.2';
+  // Prevent the canvas touch handler swallowing this element's touches
+  el.addEventListener('touchstart', (e)=>{ e.stopPropagation(); }, {passive:false});
+  el.addEventListener('touchend',   (e)=>{
+    e.preventDefault();
+    e.stopPropagation();
+    if(window._skipAction) window._skipAction();
+  }, {passive:false});
   el.addEventListener('click', ()=>{
     if(window._skipAction) window._skipAction();
   });
-  // Touch support
-  el.addEventListener('touchend', (e)=>{
-    e.preventDefault();
-    if(window._skipAction) window._skipAction();
-  });
+  el.addEventListener('mouseover', ()=>{ s.background='linear-gradient(180deg,#2266ee 0%,#1144cc 100%)'; });
+  el.addEventListener('mouseout',  ()=>{ s.background='linear-gradient(180deg,#1155cc 0%,#0033aa 100%)'; });
   document.body.appendChild(el);
   window._skipEl = el;
-  // Auto-remove on scene shutdown
   scene.events.once('shutdown', ()=>{ window.hideSkipButton(); });
 };
 window.hideSkipButton = function() {
   if(window._skipEl && window._skipEl.parentNode)
     window._skipEl.parentNode.removeChild(window._skipEl);
-  window._skipEl = null;
+  window._skipEl  = null;
   window._skipAction = null;
 };
 
@@ -1898,7 +1906,20 @@ class CloseupScene extends Phaser.Scene {
     window.showSkipButton(this);
   }
 
+  _killCurrentBubble(){
+    // Immediately destroy any live bubble objects and cancel their timers
+    if(this._bubbleTimer){ this._bubbleTimer.remove(false); this._bubbleTimer=null; }
+    if(this._bubbleObjs){
+      this.tweens.killTweensOf(this._bubbleObjs);
+      this._bubbleObjs.forEach(o=>{ if(o&&o.active) o.destroy(); });
+      this._bubbleObjs=null;
+    }
+  }
+
   _showBubble(text, onDone, duration){
+    // Kill any previous bubble immediately before showing the next
+    this._killCurrentBubble();
+
     const {width,height}=this.scale;
     const pad=18, bubbleW=460, lineH=26;
     const charsPerLine=Math.floor((bubbleW-pad*2)/11);
@@ -1907,11 +1928,9 @@ class CloseupScene extends Phaser.Scene {
     lines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
     const bubbleH=pad*2+totalLines*lineH+16;
 
-    // Anchor bubble above Claudio's head, slightly right
     const bx=this.claudio.x+50;
     const by=this.claudio.y - this.claudio.displayHeight*0.6 - 20;
 
-    // Tail connector circle (thought bubble dots)
     const dots=[];
     for(let d=0;d<3;d++){
       const dr=5-d*1.4;
@@ -1927,12 +1946,18 @@ class CloseupScene extends Phaser.Scene {
     }).setOrigin(0.5,0).setDepth(2102);
 
     const all=[bg,txt,...dots];
+    this._bubbleObjs=all;   // track so skip can destroy them
     all.forEach(o=>o.setAlpha(0));
     this.tweens.add({targets:all,alpha:1,duration:300});
 
-    this.time.delayedCall(duration,()=>{
+    this._bubbleTimer=this.time.delayedCall(duration,()=>{
+      this._bubbleTimer=null;
       this.tweens.add({targets:all,alpha:0,duration:280,
-        onComplete:()=>{ all.forEach(o=>o.destroy()); if(onDone) onDone(); }});
+        onComplete:()=>{
+          all.forEach(o=>{ if(o&&o.active) o.destroy(); });
+          this._bubbleObjs=null;
+          if(onDone) onDone();
+        }});
     });
   }
 
@@ -1953,13 +1978,22 @@ class CloseupScene extends Phaser.Scene {
     ];
 
     let i=0;
-    // Skip button advances to next bubble immediately
-    window._skipAction = ()=>{ next(); };
+    let gapTimer=null;   // the 300ms gap timer between bubbles
+
+    const skipNow=()=>{
+      // 1. Cancel pending gap timer so we don't double-show next bubble
+      if(gapTimer){ gapTimer.remove(false); gapTimer=null; }
+      // 2. Kill any bubble currently on screen
+      this._killCurrentBubble();
+      // 3. Advance
+      next();
+    };
+
+    window._skipAction = skipNow;
+
     const next=()=>{
-      // Update skip action each bubble so it always skips forward
-      window._skipAction = ()=>{ next(); };
+      window._skipAction = skipNow;   // always point at the live skipNow closure
       if(i>=bubbles.length){
-        // All bubbles done — fade to BGstreet3 scene
         window.hideSkipButton();
         this.time.delayedCall(800,()=>{
           this.cameras.main.fadeOut(800,0,0,0);
@@ -1970,8 +2004,8 @@ class CloseupScene extends Phaser.Scene {
         return;
       }
       const [text,dur]=bubbles[i++];
-      // Gap between bubbles
-      this.time.delayedCall(300,()=>this._showBubble(text,next,dur));
+      // Short gap between bubbles; store timer so skip can cancel it
+      gapTimer=this.time.delayedCall(300,()=>{ gapTimer=null; this._showBubble(text,next,dur); });
     };
     next();
   }
