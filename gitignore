@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+server.py
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor folders
+.vscode/
+.idea/
+
+# Temp / working files
+*.tmp
+*.log
+
+# Node (if you ever add tooling)
+node_modules/

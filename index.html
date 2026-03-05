@@ -1,0 +1,2122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<style>
+  html, body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:none; }
+  canvas { display:block; }
+</style>
+<title>Defend Silent Earth 3</title>
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.js"></script>
+<style>
+html,body{ margin:0; padding:0; width:100%; height:100%; background:black; overflow:hidden; }
+canvas{ display:block; image-rendering:pixelated; }
+</style>
+</head>
+<body>
+<script>
+/* ── Mobile detection & virtual pad state ───────────────────────────────── */
+window.IS_MOBILE = /Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent)
+  || (navigator.maxTouchPoints > 1);
+
+// Virtual pad — any scene reads VPAD instead of raw cursors on mobile
+window.VPAD = { left:false, right:false, up:false, down:false, attack:false, power:false };
+
+/* =====================================================================
+   TITLE SCENE
+===================================================================== */
+class TitleScene extends Phaser.Scene {
+  constructor(){ super('TitleScene'); }
+  preload(){
+    this.load.image('startBg','assets/Start.png');
+    this.load.audio('theme','assets/InKeeping8bit_https_www_youtube_com_AT_johnnymfapplecore.mp3');
+  }
+  create(){
+    const {width,height}=this.scale;
+    this.add.image(width/2,height/2,'startBg').setDisplaySize(width,height);
+    this.sound.stopAll();
+    this.music=this.sound.add('theme',{loop:true,volume:0.66});
+    this.music.play();
+    this.add.text(width-20,height-20,
+      '8-bit arrangement: "In Keeping Secrets of Silent Earth: 3"\nby @johnnymfapplecore  youtube.com/@johnnymfapplecore',
+      {fontFamily:'Arial',fontSize:'15px',color:'#aaaaaa',align:'right'}
+    ).setOrigin(1,1).setDepth(100);
+    this.input.once('pointerdown',()=>{
+      this.cameras.main.fadeOut(700,0,0,0);
+      this.time.delayedCall(750,()=>{
+        this.scene.start('ClaudioScene',{music:this.music});
+      });
+    });
+  }
+}
+
+/* =====================================================================
+   GAME SCENE — v6
+===================================================================== */
+class GameScene extends Phaser.Scene {
+  constructor(){ super('GameScene'); }
+  init(data){ this.music=data.music; this.level=data.level||1; }
+
+  preload(){
+    this.load.image('bg','assets/background.png');
+    this.load.image('bg2','assets/background2.png');
+    this.load.image('arbor','assets/arbor.png');
+    this.load.spritesheet('hero_walk',      'assets/hero/hero_walk.png',        {frameWidth:64, frameHeight:64});
+    this.load.spritesheet('hero_attack',    'assets/hero/hero_attack.png',      {frameWidth:64, frameHeight:64});
+    this.load.spritesheet('fireball',       'assets/hero/fireball.png',         {frameWidth:32, frameHeight:32});
+    this.load.spritesheet('enemy_walk',     'assets/enemy/enemy_walk.png',      {frameWidth:64, frameHeight:64});
+    this.load.spritesheet('enemy_fireball', 'assets/enemy/enemy_fireball.png',  {frameWidth:32, frameHeight:32});
+    this.load.spritesheet('enemy_death',    'assets/enemy/enemy_death.png',     {frameWidth:64, frameHeight:64});
+    this.load.image('barrel','assets/barrel/barrel1.png');
+    this.load.spritesheet('explosion',      'assets/barrel/explosion.png',      {frameWidth:64, frameHeight:64});
+    this.load.spritesheet('inferno_walk',   'assets/inferno/inferno_walk.png',  {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('inferno_attack', 'assets/inferno/inferno_attack.png',{frameWidth:128,frameHeight:128});
+    this.load.spritesheet('sizer_walk',     'assets/sizer/sizer_walk.png',      {frameWidth:64, frameHeight:64});
+    this.load.spritesheet('sizer_transform','assets/sizer/sizer_transform.png', {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('sizer_run',      'assets/sizer/sizer_run.png',       {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('sizer_attack',   'assets/sizer/sizer_attack.png',    {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('sizer_death',    'assets/sizer/sizer_death.png',     {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('mayo_walk',      'assets/mayo/mayo_walk.png',        {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('mayo_attack',    'assets/mayo/mayo_attack.png',      {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('mayo_shoot',     'assets/mayo/mayo_shoot.png',       {frameWidth:128,frameHeight:128});
+    // The Prise — 128x128 frames
+    this.load.spritesheet('prise_run',           'assets/prise/prise_run.png',          {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('prise_attack',        'assets/prise/prise_attack.png',       {frameWidth:128,frameHeight:128});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.worldWidth       = width*5;
+    this.gameOver         = false;
+    this.cutsceneActive   = false;
+    this.allWavesCleared  = false;
+    this.waveCountdownActive = false;
+
+    this.cameras.main.setBounds(0,0,this.worldWidth,height);
+    if(this.level===2){
+      // Tile horizontally, stretch to fit screen height
+      const bgSrc=this.textures.get('bg2').getSourceImage();
+      const bgScale=height/bgSrc.height;
+      this.bg=this.add.tileSprite(0,0,this.worldWidth,height,'bg2').setOrigin(0,0).setTileScale(bgScale,bgScale);
+    } else {
+      this.bg=this.add.tileSprite(0,0,this.worldWidth,height,'bg').setOrigin(0,0);
+    }
+    if(this.level===1) this.add.image(this.worldWidth*0.70,height*0.22,'arbor').setScale(200/1024).setDepth(5);
+
+    /* ── Animations ── */
+    const A=this.anims;
+    const _c=(cfg)=>{ if(!A.exists(cfg.key)) A.create(cfg); };
+    _c({key:'hero-walk',          frames:A.generateFrameNumbers('hero_walk',      {start:0,end:2}),  frameRate:10,repeat:-1});
+    _c({key:'hero-attack',        frames:A.generateFrameNumbers('hero_attack',    {start:0,end:8}),  frameRate:12,repeat:0});
+    _c({key:'fireball-fly',       frames:A.generateFrameNumbers('fireball',       {start:0,end:2}),  frameRate:12,repeat:-1});
+    _c({key:'enemy-walk',         frames:A.generateFrameNumbers('enemy_walk',     {start:0,end:2}),  frameRate:8, repeat:-1});
+    _c({key:'enemy-death',        frames:A.generateFrameNumbers('enemy_death',    {start:0,end:6}),  frameRate:12,repeat:0});
+    _c({key:'enemy-fireball-fly', frames:A.generateFrameNumbers('enemy_fireball', {start:0,end:2}),  frameRate:10,repeat:-1});
+    _c({key:'explosion-play',     frames:A.generateFrameNumbers('explosion',      {start:0,end:8}),  frameRate:20,repeat:0});
+    _c({key:'inferno-walk',       frames:A.generateFrameNumbers('inferno_walk',   {start:0,end:8}),  frameRate:10,repeat:-1});
+    _c({key:'inferno-attack',     frames:A.generateFrameNumbers('inferno_attack', {start:0,end:8}),  frameRate:12,repeat:0});
+    _c({key:'sizer-walk',         frames:A.generateFrameNumbers('sizer_walk',     {start:0,end:8}),  frameRate:10,repeat:-1});
+    _c({key:'sizer-transform',    frames:A.generateFrameNumbers('sizer_transform',{start:0,end:8}),  frameRate:9, repeat:0});
+    _c({key:'sizer-run',          frames:A.generateFrameNumbers('sizer_run',      {start:0,end:24}), frameRate:14,repeat:-1});
+    _c({key:'sizer-attack',       frames:A.generateFrameNumbers('sizer_attack',   {start:0,end:8}),  frameRate:12,repeat:0});
+    _c({key:'sizer-death',        frames:A.generateFrameNumbers('sizer_death',    {start:0,end:35}), frameRate:14,repeat:0});
+    _c({key:'mayo-walk',  frames:A.generateFrameNumbers('mayo_walk',   {start:0,end:15}),  frameRate:10,repeat:-1});
+    _c({key:'mayo-attack',frames:A.generateFrameNumbers('mayo_attack', {start:0,end:15}),  frameRate:12,repeat:0});
+    _c({key:'mayo-shoot', frames:A.generateFrameNumbers('mayo_shoot',  {start:0,end:15}),  frameRate:12,repeat:-1});
+    _c({key:'prise-run',    frames:A.generateFrameNumbers('prise_run',    {start:0,end:15}), frameRate:12, repeat:-1});
+    _c({key:'prise-attack', frames:A.generateFrameNumbers('prise_attack', {start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'prise-idle',   frames:A.generateFrameNumbers('prise_attack', {start:0,end:0}),  frameRate:1,  repeat:-1});
+
+    /* ── CHASE ── */
+    this.hero=this.add.sprite(width*0.12,height*0.78,'hero_walk').setScale(2).setDepth(50);
+    this.heroFacing=1; this.isAttacking=false;
+    this.heroHealth=10; this.heroInvincible=false;
+    this.heroPower=0;
+    this.heroPowerMax = this.level===2 ? 20 : 10;
+    this.hero.on('animationcomplete-hero-attack',()=>{
+      this.isAttacking=false; this.hero.setTexture('hero_walk').setFrame(0);
+    });
+    this.cameras.main.startFollow(this.hero,true,0.08,0.08);
+    // Stop everything (crowing from Claudio scenes, any leftover sounds)
+    this.sound.getAll().forEach(s=>{ if(s.isPlaying) s.stop(); });
+    // Start InKeeping fresh
+    this.music=this.sound.add('theme',{loop:true,volume:0});
+    this.music.play();
+    this.tweens.add({targets:this.music, volume:0.66, duration:1500});
+    this.heroMinX=40; this.heroMaxX=this.worldWidth-40;
+    this.heroMinY=height*0.60; this.heroMaxY=height*0.91;
+
+    /* ── INFERNO (level 1 only) ── */
+    this.inferno=null;
+    if(this.level===1){
+      this.inferno=this.add.sprite(width*0.08,height*0.78,'inferno_walk').setScale(1.4).setDepth(48);
+      this.inferno.play('inferno-walk');
+      this.inferno.fireCooldown=1800; this.inferno.isAttacking=false;
+      this.inferno.invincible=false; this.inferno.facing=1; this.inferno.alive=true;
+      this.inferno.on('animationcomplete-inferno-attack',()=>{
+        this.inferno.isAttacking=false;
+        if(this.inferno.alive) this.inferno.play('inferno-walk');
+      });
+    }
+
+    /* ── SIZER (level 1 only) ── */
+    this.sizer=null;
+    if(this.level===1){
+      this.sizer=this.add.sprite(width*0.10,height*0.80,'sizer_walk').setScale(2).setDepth(49);
+      this.sizer.play('sizer-walk');
+      this.sizer.transformed=false; this.sizer.transforming=false;
+      this.sizer.invincible=false; this.sizer.isAttacking=false;
+      this.sizer.attackCooldown=0; this.sizer.isMoving=false;
+      this.sizer.facing=1; this.sizer.dead=false;
+
+      this.sizer.on('animationcomplete-sizer-transform',()=>{
+        this.sizer.transformed=true; this.sizer.transforming=false;
+        this.sizer.anims.stop(); // stop walk anim before switching texture
+        this.sizer.setScale(2.5).setDepth(51);
+        this.sizer.setTexture('sizer_run').setFrame(0);
+        this.showAnnounce('SIZER UNLEASHED!','#ff4400');
+        this.sizerAreaBlast(this.sizer.x,this.sizer.y,300);
+      });
+      this.sizer.on('animationcomplete-sizer-attack',()=>{ this.sizer.isAttacking=false; });
+      this.sizer.on('animationcomplete-sizer-death',()=>{ this.sizer.anims.stop(); this.sizer.dead=true; });
+    }
+
+    /* ── UI ── */
+    this.add.text(20,14,'CHASE',{fontFamily:'Arial',fontSize:'32px',color:'#ffffff'}).setScrollFactor(0).setDepth(1000);
+    this.add.text(20,52,'HP',{fontFamily:'Arial',fontSize:'14px',color:'#88ff88'}).setScrollFactor(0).setDepth(1000);
+    this.heroHealthBars=[];
+    for(let i=0;i<10;i++) this.heroHealthBars.push(
+      this.add.rectangle(56+i*30,59,26,14,0x00dd00).setScrollFactor(0).setDepth(1000)
+    );
+    this.add.text(20,80,'PWR',{fontFamily:'Arial',fontSize:'14px',color:'#88bbff'}).setScrollFactor(0).setDepth(1000);
+    this.heroPowerBars=[];
+    for(let i=0;i<10;i++) this.heroPowerBars.push(
+      this.add.rectangle(56+i*22,87,18,10,0x00aaff).setScrollFactor(0).setDepth(1000).setAlpha(0.2)
+    );
+    this.powerHint=this.add.text(20,104,'',{fontFamily:'Arial',fontSize:'12px',color:'#335577'}).setScrollFactor(0).setDepth(1000);
+    if(this.level===2) this.add.text(20,125,'LEVEL 2 — SUMMON THE PRISE',{fontFamily:'Arial',fontSize:'12px',color:'#ff44aa'}).setScrollFactor(0).setDepth(1000);
+
+    this.waveText=this.add.text(width-20,14,'',{fontFamily:'Arial',fontSize:'22px',color:'#ffdd44',align:'right'}).setOrigin(1,0).setScrollFactor(0).setDepth(1000);
+    this.countdownText=this.add.text(width/2,height*0.18,'',{
+      fontFamily:'Arial Black',fontSize:'110px',color:'#ffffff',stroke:'#000000',strokeThickness:10
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1500).setAlpha(0);
+
+    /* ── Groups / arrays ── */
+    this.fireballs=this.add.group(); this.enemyFireballs=this.add.group(); this.infernoFireballs=this.add.group();
+    this.enemies=[]; this.barrels=[];
+    this.priseActive=false; this.mayo=null;
+    this.prises=[]; // array of 12 Prise instances
+    this.priseSpawnTimer=0; // continuous enemy spawning timer
+    this.priseSpawning=false; // whether endless spawn mode is active
+
+    /* ── Waves ── */
+    this.waveConfig=[
+      {threshold:0,                    count:6},
+      {threshold:this.worldWidth*0.18, count:6},
+      {threshold:this.worldWidth*0.36, count:7},
+      {threshold:this.worldWidth*0.54, count:8},
+      {threshold:this.worldWidth*0.72, count:9},
+    ];
+    this.wavesTriggered=0;
+    this.spawnWave(0);
+
+    for(let i=0;i<20;i++){
+      this.barrels.push(this.add.image(
+        Phaser.Math.Between(300,this.worldWidth-200),
+        Phaser.Math.Between(height*0.70,height*0.88),'barrel'
+      ).setScale(0.2).setDepth(9));
+    }
+
+    this.cursors=this.input.keyboard.createCursorKeys();
+    this.attackKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
+    this.powerKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+    this.speed=320; this.SEPARATION_RADIUS=70;
+  }
+
+  /* ── One-way push: only companion B yields to A ── */
+  pushAway(a,b,radius){
+    if(!b||!b.active) return;
+    const dx=b.x-a.x, dy=b.y-a.y, dist=Math.hypot(dx,dy);
+    if(dist<radius&&dist>0){ const p=(radius-dist)*0.3; b.x+=(dx/dist)*p; b.y+=(dy/dist)*p*0.4; }
+  }
+
+  /* ── Wave countdown ── */
+  startWaveCountdown(waveIndex){
+    if(this.waveCountdownActive) return;
+    this.waveCountdownActive=true;
+    let count=3;
+    this.countdownText.setAlpha(1).setText('3').setColor('#ffdd44').setY(this.scale.height*0.18);
+    const tick=()=>{
+      count--;
+      if(count>0){
+        this.countdownText.setText(count.toString());
+        this.tweens.add({targets:this.countdownText,scaleX:1.4,scaleY:1.4,duration:100,yoyo:true});
+        this.time.delayedCall(1000,tick);
+      } else {
+        this.countdownText.setText('FIGHT!').setColor('#ff4422');
+        this.tweens.add({targets:this.countdownText,alpha:0,y:this.countdownText.y-40,duration:900,
+          onComplete:()=>{ this.countdownText.setAlpha(0).setY(this.scale.height*0.18); }});
+        this.spawnWave(waveIndex);
+        this.waveCountdownActive=false;
+      }
+    };
+    this.time.delayedCall(1000,tick);
+  }
+
+  spawnWave(waveIndex){
+    const {height}=this.scale;
+    const cfg=this.waveConfig[waveIndex];
+    const camLeft=this.cameras.main.scrollX, camRight=camLeft+this.scale.width;
+    for(let i=0;i<cfg.count;i++){
+      const fromRight=i%2===0;
+      const spawnX=fromRight?camRight+80+Phaser.Math.Between(0,200):camLeft-80-Phaser.Math.Between(0,200);
+      const spawnY=Phaser.Math.Between(height*0.63,height*0.88);
+      const e=this.add.sprite(spawnX,spawnY,'enemy_walk').setScale(2).setDepth(10);
+      e.hp=2; e.play('enemy-walk'); e.dead=false;
+      e.wanderX=Phaser.Math.Between(-1,1)||1; e.wanderY=Phaser.Math.Between(-1,1)||1;
+      e.wanderTimer=Phaser.Math.Between(1000,3000); e.fireCooldown=Phaser.Math.Between(1200,2800);
+      e.healthBars=[];
+      for(let j=0;j<3;j++) e.healthBars.push(this.add.rectangle(0,0,8,4,0x00dd00).setDepth(20));
+      this.enemies.push(e);
+    }
+    this.wavesTriggered++;
+    this.waveText.setText(`WAVE ${this.wavesTriggered} / ${this.waveConfig.length}`);
+    if(waveIndex>0) this.showAnnounce(`WAVE ${this.wavesTriggered}  INCOMING!`,'#ff6622');
+    else this.showAnnounce('DEFEND!','#ffdd44');
+    if(this.level===1&&waveIndex===2&&this.sizer&&!this.sizer.transformed&&!this.sizer.transforming)
+      this.time.delayedCall(1400,()=>this.triggerSizerDialogueAndTransform());
+  }
+
+  showAnnounce(msg,color='#ffdd44'){
+    const {width,height}=this.scale;
+    const t=this.add.text(width/2,height*0.30,msg,{
+      fontFamily:'Arial Black',fontSize:'52px',color,stroke:'#000000',strokeThickness:6
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1500);
+    this.tweens.add({targets:t,alpha:0,y:t.y-60,duration:1800,onComplete:()=>t.destroy()});
+  }
+
+  /* ── Sizer area blast ── */
+  sizerAreaBlast(x,y,radius){
+    const ring=this.add.circle(x,y,10,0xff4400,0).setStrokeStyle(8,0xff8800).setDepth(500);
+    this.tweens.add({targets:ring,scaleX:radius/10,scaleY:radius/10,alpha:0,duration:500,onComplete:()=>ring.destroy()});
+    const flash=this.add.rectangle(this.scale.width/2,this.scale.height/2,this.scale.width,this.scale.height,0xff4400)
+      .setAlpha(0.25).setDepth(499).setScrollFactor(0);
+    this.tweens.add({targets:flash,alpha:0,duration:400,onComplete:()=>flash.destroy()});
+    this.cameras.main.shake(300,0.015);
+    this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+      if(Phaser.Math.Distance.Between(x,y,e.x,e.y)<radius){
+        e.dead=true; e.healthBars.forEach(b=>b.destroy());
+        this.explode(e.x,e.y,false);
+        e.setTexture('enemy_death').setFrame(0); e.play('enemy-death');
+        e.once('animationcomplete-enemy-death',()=>{ e.anims.stop(); e.setFrame(6); });
+        this.heroPower=Math.min(this.heroPower+2,this.heroPowerMax);
+      }
+    });
+  }
+
+  triggerSizerTransform(){
+    if(!this.sizer||this.sizer.transforming||this.sizer.transformed) return;
+    this.sizer.transforming=true;
+    this.sizer.anims.stop();
+    this.sizer.setTexture('sizer_transform').setFrame(0);
+    this.sizer.play('sizer-transform');
+    this.cameras.main.shake(400,0.012);
+  }
+
+  triggerSizerDialogueAndTransform(){
+    if(!this.sizer||this.sizer.transforming||this.sizer.transformed) return;
+    this._dialoguePause=true;
+
+    // Stop Inferno and Sizer animations
+    if(this.inferno){
+      this.inferno.isAttacking=false;
+      this.inferno.anims.stop(); this.inferno.setFrame(0);
+      this.inferno.facing=1; this.inferno.setFlipX(false);
+    }
+    if(this.sizer){
+      this.sizer.isAttacking=false; this.sizer.isMoving=false;
+      this.sizer.anims.stop();
+      if(!this.sizer.transformed) this.sizer.setTexture('sizer_walk').setFrame(0);
+    }
+
+    // Line 1 — Inferno
+    this.showDialogue('Inferno', "Sizer! You're breaking rank--!",
+      this.inferno||this.hero, ()=>{
+
+      // Sizer turns to face Inferno
+      if(this.sizer){ this.sizer.facing=-1; this.sizer.setFlipX(true); }
+
+      // Line 2 — Sizer
+      this.showDialogue('Sizer', "Makes breaking bones easier!",
+        this.sizer||this.hero, ()=>{
+
+        // Sizer turns back toward Mayo (right)
+        if(this.sizer){ this.sizer.facing=1; this.sizer.setFlipX(false); }
+
+        // Line 3 — big Sizer speech, overlaps with transform start
+        this.showDialogue('Sizer',
+          "I'm doing what you made me to do. So get behind me or, at the very least... GET THE HELL OUT OF MY WAY!",
+          this.sizer||this.hero, ()=>{}, 3800);
+
+        // Transform fires 600ms into the speech
+        this.time.delayedCall(600, ()=>{
+          this._dialoguePause=false;
+          this.triggerSizerTransform();
+        });
+
+      }, 2200);
+    }, 2800);
+  }
+
+  /* ── Find nearest enemy — onScreenOnly restricts to camera view ── */
+  findNearestEnemy(x,y,onScreenOnly=false){
+    let nearest=null, best=Infinity;
+    const camLeft=this.cameras.main.scrollX, camRight=camLeft+this.scale.width;
+    this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+      if(onScreenOnly&&(e.x<camLeft-120||e.x>camRight+120)) return;
+      const d=Phaser.Math.Distance.Between(x,y,e.x,e.y);
+      if(d<best){ best=d; nearest=e; }
+    });
+    return nearest;
+  }
+
+  flashInvincible(sprite){
+    if(!sprite||sprite.invincible) return;
+    sprite.invincible=true;
+    this.tweens.add({targets:sprite,alpha:0.3,duration:80,yoyo:true,repeat:4,
+      onComplete:()=>{ if(sprite){ sprite.alpha=1; sprite.invincible=false; } }});
+  }
+
+  infernoFire(){
+    if(!this.inferno||!this.inferno.active||!this.inferno.alive||this.inferno.isAttacking) return;
+    const target=this.findNearestEnemy(this.inferno.x,this.inferno.y,true);
+    if(!target) return;
+    const dir=Math.sign(target.x-this.inferno.x)||this.inferno.facing;
+    this.inferno.isAttacking=true; this.inferno.facing=dir;
+    this.inferno.setFlipX(dir<0); this.inferno.play('inferno-attack',true);
+    // Big glowing explosive round — use fireball sprite scaled up with orange tint
+    const fb=this.add.sprite(this.inferno.x+dir*60,this.inferno.y-20,'fireball')
+      .setScale(3.5).setDepth(120).setTint(0xff6600);
+    // Pulsing glow ring around it
+    const glow=this.add.circle(fb.x,fb.y,28,0xff4400,0).setStrokeStyle(5,0xff8800).setDepth(119);
+    fb.play('fireball-fly'); fb.vx=dir*580; fb.startX=fb.x; fb.maxRange=900;
+    fb.glowObj=glow; // track it so we can move/destroy together
+    this.infernoFireballs.add(fb);
+  }
+
+  sizerMelee(){
+    if(!this.sizer||!this.sizer.active||this.sizer.isAttacking||this.sizer.transforming) return;
+    this.sizer.isAttacking=true; this.sizer.play('sizer-attack',true);
+    this.sizerAreaBlast(this.sizer.x,this.sizer.y,200);
+  }
+
+  firePowerBlast(){
+    this.heroPower=0; this.heroPowerBars.forEach(b=>b.setAlpha(0.2));
+    if(this.level===2){ this.summonThePrise(); return; }
+    const flash=this.add.rectangle(this.scale.width/2,this.scale.height/2,this.scale.width,this.scale.height,0x0066ff)
+      .setAlpha(0.65).setDepth(900).setScrollFactor(0);
+    this.tweens.add({targets:flash,alpha:0,duration:500,onComplete:()=>flash.destroy()});
+    const ring=this.add.circle(this.hero.x,this.hero.y,10,0xffffff,0).setStrokeStyle(6,0x00aaff).setDepth(901);
+    this.tweens.add({targets:ring,scaleX:30,scaleY:30,alpha:0,duration:500,onComplete:()=>ring.destroy()});
+    this.cameras.main.shake(500,0.028);
+    this.enemies.forEach(e=>{ if(!e.active||e.dead) return; e.dead=true; e.healthBars.forEach(b=>b.destroy()); this.explode(e.x,e.y,false); e.setTexture('enemy_death').setFrame(6); });
+    this.enemyFireballs.clear(true,true);
+  }
+
+  summonThePrise(){
+    if(this.priseActive) return;
+    this.priseActive=true;
+    const {width,height}=this.scale;
+
+    // Title flash
+    const flash=this.add.rectangle(width/2,height/2,width,height,0xaaaaff).setAlpha(0.8).setDepth(1800).setScrollFactor(0);
+    this.tweens.add({targets:flash,alpha:0,duration:700,onComplete:()=>flash.destroy()});
+    for(let i=0;i<20;i++){
+      const bolt=this.add.rectangle(
+        Phaser.Math.Between(60,width-60),Phaser.Math.Between(60,height-60),
+        Phaser.Math.Between(2,5),Phaser.Math.Between(40,160),0xffffff
+      ).setAlpha(0.9).setDepth(1801).setScrollFactor(0).setRotation(Phaser.Math.FloatBetween(-1.5,1.5));
+      this.tweens.add({targets:bolt,alpha:0,scaleY:4,duration:800,delay:i*30,onComplete:()=>bolt.destroy()});
+    }
+    this.cameras.main.shake(700,0.035);
+    const title=this.add.text(width/2,height*0.36,'THE PRISE\nHAS ARRIVED',{
+      fontFamily:'Arial Black',fontSize:'90px',color:'#ffffff',
+      stroke:'#8888ff',strokeThickness:14,align:'center'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1900).setAlpha(0).setScale(0.4);
+    this.tweens.add({targets:title,alpha:1,scaleX:1,scaleY:1,duration:400,ease:'Back.Out',
+      onComplete:()=>this.time.delayedCall(1600,()=>{
+        this.tweens.add({targets:title,alpha:0,duration:400,onComplete:()=>title.destroy()});
+      })});
+
+    // Spawn 12 Prises staggered across screen, each with its own AI state
+    const camLeft=this.cameras.main.scrollX;
+    for(let i=0;i<12;i++){
+      this.time.delayedCall(200+i*180,()=>this.spawnOnePrise(i));
+    }
+
+    // Start endless enemy spawning for 18 seconds
+    this.priseSpawning=true;
+    this.priseSpawnTimer=18000;
+
+    // Spawn enemies for 28s, giving Prises plenty of action before level ends
+    this.time.delayedCall(28000,()=>{
+      this.priseSpawning=false;
+      // Give a final moment for remaining enemies to be cleared, then check win
+    });
+  }
+
+  spawnOnePrise(index){
+    const {width,height}=this.scale;
+    const camLeft=this.cameras.main.scrollX;
+
+    // Alternate left/right spawns
+    const fromLeft=index%2===0;
+    const spawnX=fromLeft
+      ? camLeft - 140 - Phaser.Math.Between(0,160)
+      : camLeft + width + 140 + Phaser.Math.Between(0,160);
+
+    const spawnY=this.heroMaxY||this.scale.height*0.91;
+    const p=this.add.sprite(spawnX,spawnY,'prise_run',0).setScale(3.0).setDepth(60+index);
+    // No tint — use natural sprite colours
+    p.clearTint();
+
+    p.priseState='running';
+    p.facing=fromLeft?1:-1;
+    p.setFlipX(!fromLeft);
+    p.attackLocked=false;
+    p.groundY=this.heroMaxY||this.scale.height*0.91;
+    // Each Prise gets a unique guard slot offset so they spread out around Chase
+    // Slots: spread -500 to +500 in steps, alternating sides
+    const slotStep=90;
+    const half=Math.floor(12/2);
+    const slotIndex=index-half; // -6..+5
+    p.guardOffset=slotIndex*slotStep; // unique X offset from Chase
+
+    p.play('prise-run',true);
+
+    this.prises.push(p);
+  }
+
+  priseStrikeLightning(px,py,kx,ky){
+    const steps=8;
+    const g=this.add.graphics().setDepth(510);
+    const pts=[];
+    for(let i=0;i<=steps;i++){
+      const t=i/steps;
+      const jx=(i>0&&i<steps)?Phaser.Math.Between(-26,26):0;
+      const jy=(i>0&&i<steps)?Phaser.Math.Between(-10,10):0;
+      pts.push({x:px+(kx-px)*t+jx, y:py+(ky-py)*t+jy});
+    }
+    g.lineStyle(5,0xffffff,0.9); g.beginPath(); g.moveTo(pts[0].x,pts[0].y);
+    pts.slice(1).forEach(p=>g.lineTo(p.x,p.y)); g.strokePath();
+    g.lineStyle(2,0xbbddff,0.7); g.beginPath(); g.moveTo(pts[0].x,pts[0].y);
+    pts.slice(1).forEach(p=>g.lineTo(p.x,p.y)); g.strokePath();
+    this.tweens.add({targets:g,alpha:0,duration:220,onComplete:()=>g.destroy()});
+    this.time.delayedCall(65,()=>{
+      const g2=this.add.graphics().setDepth(509);
+      const pts2=[];
+      for(let i=0;i<=steps;i++){
+        const t=i/steps;
+        pts2.push({x:px+(kx-px)*t+Phaser.Math.Between(-16,16), y:py+(ky-py)*t+Phaser.Math.Between(-7,7)});
+      }
+      g2.lineStyle(3,0xaaddff,0.75); g2.beginPath(); g2.moveTo(pts2[0].x,pts2[0].y);
+      pts2.slice(1).forEach(p=>g2.lineTo(p.x,p.y)); g2.strokePath();
+      this.tweens.add({targets:g2,alpha:0,duration:180,onComplete:()=>g2.destroy()});
+    });
+  }
+
+  updatePrises(delta){
+    const {width,height}=this.scale;
+    const camLeft=this.cameras.main.scrollX;
+    const camRight=camLeft+width;
+    const walkSpeed=(260*delta)/1000;
+    const huntSpeed=(340*delta)/1000;
+    const ATTACK_RANGE=120;
+    const minY=this.heroMinY||height*0.60;
+    const maxY=this.heroMaxY||height*0.91;
+
+    this.prises.forEach(p=>{
+      if(!p.active) return;
+      if(p.priseState==='ceremony') return;
+      if(p.priseState==='attacking') return;
+
+      // ── ENTERING: run onto screen at ground level ──
+      if(p.priseState==='running'){
+        p.x+=p.facing*walkSpeed*1.5;
+        p.y=maxY;
+        if(p.anims.currentAnim?.key!=='prise-run') p.play('prise-run',true);
+        const onScreen=(p.facing>0&&p.x>camLeft+80)||(p.facing<0&&p.x<camRight-80);
+        if(onScreen) p.priseState='guard';
+        return;
+      }
+
+      // ── HUNT nearest on-screen enemy ──
+      const target=this.findNearestEnemy(p.x,p.y,true);
+
+      if(target&&!p.attackLocked){
+        const dx=target.x-p.x, dy=target.y-p.y;
+        const dist=Math.hypot(dx,dy);
+        const nf=Math.sign(dx);
+        if(nf&&nf!==p.facing){ p.facing=nf; p.setFlipX(nf<0); }
+
+        if(dist>ATTACK_RANGE){
+          // Move in 2D toward enemy, Y clamped to Chase's range
+          p.x+=Math.sign(dx)*huntSpeed;
+          p.y+=Math.sign(dy)*huntSpeed*0.55;
+          p.y=Phaser.Math.Clamp(p.y, minY, maxY);
+          if(p.anims.currentAnim?.key!=='prise-run') p.play('prise-run',true);
+          p.priseState='hunt';
+        } else {
+          // Strike with lightning then kill
+          p.attackLocked=true;
+          const swordX=p.x+(p.facing>0?50:-50), swordY=p.y-60;
+          this.priseStrikeLightning(swordX, swordY, target.x, target.y-20);
+          if(target.active&&!target.dead){
+            const kx=target.x, ky=target.y;
+            target.dead=true; target.healthBars.forEach(b=>b.destroy());
+            target.setTexture('enemy_death').setFrame(0); target.play('enemy-death');
+            target.once('animationcomplete-enemy-death',()=>{ target.anims.stop(); target.setFrame(6); });
+            const ring=this.add.circle(kx,ky,10,0xffffff,0).setStrokeStyle(5,0xaaddff).setDepth(500);
+            this.tweens.add({targets:ring,scaleX:10,scaleY:10,alpha:0,duration:380,onComplete:()=>ring.destroy()});
+            this.cameras.main.shake(160,0.009);
+            [[0,0],[28,-12],[-28,-8],[16,22],[-18,10]].forEach(([ox,oy],i)=>{
+              this.time.delayedCall(i*30,()=>{
+                const boom=this.add.sprite(kx+ox,ky+oy,'explosion').setScale(2.0+i*0.2).setDepth(400+i);
+                boom.play('explosion-play'); boom.once('animationcomplete',()=>boom.destroy());
+              });
+            });
+            this.enemies.filter(ee=>ee.active&&!ee.dead).forEach(ee=>{
+              if(Phaser.Math.Distance.Between(kx,ky,ee.x,ee.y)<300){
+                ee.dead=true; ee.healthBars.forEach(b=>b.destroy());
+                ee.setTexture('enemy_death').setFrame(0); ee.play('enemy-death');
+                ee.once('animationcomplete-enemy-death',()=>{ ee.anims.stop(); ee.setFrame(6); });
+              }
+            });
+          }
+          p.priseState='attacking';
+          p.play('prise-attack',true);
+          p.once('animationcomplete-prise-attack',()=>{
+            if(!p.active) return;
+            p.attackLocked=false;
+            p.priseState='guard';
+            p.setTexture('prise_attack').setFrame(0); // idle pose
+          });
+        }
+
+      } else {
+        // Guard: walk to unique slot around Chase in 2D
+        const guardX=Phaser.Math.Clamp(this.hero.x+p.guardOffset, camLeft+60, camRight-60);
+        const guardY=Phaser.Math.Clamp(this.hero.y+p.guardOffset*0.15, minY, maxY);
+        const dx=guardX-p.x, dy=guardY-p.y;
+
+        if(Math.abs(dx)>35||Math.abs(dy)>20){
+          const nf=Math.sign(dx);
+          if(nf&&nf!==p.facing){ p.facing=nf; p.setFlipX(nf<0); }
+          if(Math.abs(dx)>35) p.x+=Math.sign(dx)*walkSpeed;
+          if(Math.abs(dy)>20) p.y+=Math.sign(dy)*walkSpeed*0.5;
+          p.y=Phaser.Math.Clamp(p.y, minY, maxY);
+          if(p.anims.currentAnim?.key!=='prise-run') p.play('prise-run',true);
+        } else {
+          // At post — idle on frame 0 of attack sheet, face outward
+          const facingOut=p.guardOffset>=0?1:-1;
+          if(p.facing!==facingOut){ p.facing=facingOut; p.setFlipX(facingOut<0); }
+          if(p.texture.key!=='prise_attack'||p.anims.isPlaying){
+            p.setTexture('prise_attack').setFrame(0);
+          }
+        }
+        p.priseState='guard';
+      }
+    });
+  }
+
+  spawnEnemyFireball(enemy){
+    if(!enemy.active) return;
+    const dir=Math.sign(this.hero.x-enemy.x)||1;
+    const fb=this.add.sprite(enemy.x+dir*40,enemy.y,'enemy_fireball').setScale(2).setDepth(100);
+    fb.play('enemy-fireball-fly'); fb.vx=dir*420; fb.startX=fb.x; fb.maxRange=640;
+    this.enemyFireballs.add(fb);
+  }
+
+  damageHero(){
+    if(this.heroInvincible||this.gameOver||this.cutsceneActive) return;
+    this.heroHealth=Math.max(0,this.heroHealth-0.5);
+    this.heroInvincible=true; this.cameras.main.shake(150,0.009);
+    this.heroHealthBars.forEach((bar,i)=>bar.setAlpha(this.heroHealth>=(i+1)?1:this.heroHealth>=(i+0.5)?0.5:0.15));
+    this.tweens.add({targets:this.hero,alpha:0,duration:80,yoyo:true,repeat:6,
+      onComplete:()=>{ this.heroInvincible=false; this.hero.alpha=1; if(this.heroHealth<=0) this.triggerGameOver(); }});
+  }
+
+  triggerGameOver(){
+    if(this.gameOver) return;
+    this.gameOver=true; this.cameras.main.shake(700,0.025);
+    const {width,height}=this.scale;
+    this.add.rectangle(width/2,height/2,width,height,0x000000,0.72).setScrollFactor(0).setDepth(2000);
+    this.add.text(width/2,height/2-70,'GAME OVER',{fontFamily:'Arial Black',fontSize:'96px',color:'#ff2222',stroke:'#000000',strokeThickness:8}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+    this.add.text(width/2,height/2+50,'Click to try again',{fontFamily:'Arial',fontSize:'36px',color:'#ffffff'}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+    this.time.delayedCall(900,()=>this.input.once('pointerdown',()=>{
+        if(this.music&&this.music.isPlaying) this.music.stop();
+        this.scene.restart({music:null,level:this.level});
+      }));
+  }
+
+  explode(x,y,shake=true){
+    if(shake) this.cameras.main.shake(220,0.014);
+    const boom=this.add.sprite(x,y,'explosion').setScale(2).setDepth(160);
+    boom.play('explosion-play'); boom.once('animationcomplete',()=>boom.destroy());
+  }
+
+  /* ====================================================================
+     DIALOGUE HELPER
+  ==================================================================== */
+  // Show a speech bubble attached above a sprite's head (world space)
+  // sprite: the Phaser sprite to attach to
+  showDialogue(speaker, text, sprite, onDone, duration=3000){
+    const pad=16;
+    const bubbleW=420;
+    const lineH=24;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/11);
+    const rawLines=text.split('\n');
+    let totalLines=0;
+    rawLines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
+    const bubbleH=pad*2 + 24 + totalLines*lineH;
+
+    // We use world-space objects that scroll with the camera
+    // Anchor bubble bottom-center above character's head
+    const headClearance=80; // pixels above sprite center
+
+    const bg=this.add.rectangle(0,0, bubbleW, bubbleH, 0xffffff, 0.95)
+      .setStrokeStyle(3, 0x222244).setOrigin(0.5, 1).setDepth(2099);
+
+    // Tail triangle pointing DOWN (toward the character)
+    const tail=this.add.triangle(0,0, -10,0, 10,0, 0,16, 0xffffff,0.95)
+      .setDepth(2098);
+
+    // Speaker name — bold blue
+    const nameT=this.add.text(0, 0, speaker+':',
+      {fontFamily:'Arial Black', fontSize:'16px', color:'#003399'}
+    ).setOrigin(0.5, 0).setDepth(2100);
+
+    // Body text
+    const bodyT=this.add.text(0, 0, '"'+text+'"',
+      {fontFamily:'Arial', fontSize:'17px', color:'#111111',
+       wordWrap:{width:bubbleW-pad*2}, align:'left'}
+    ).setOrigin(0.5, 0).setDepth(2100);
+
+    const all=[bg, tail, nameT, bodyT];
+    all.forEach(o=>o.setAlpha(0));
+    this.tweens.add({targets:all, alpha:1, duration:200});
+
+    // Update position every frame so bubble tracks the sprite
+    const updatePos=()=>{
+      if(!sprite||!sprite.active) return;
+      const bx=sprite.x;
+      const by=sprite.y - headClearance - sprite.displayHeight*0.5;
+      bg.setPosition(bx, by);
+      tail.setPosition(bx, by); // tail sits at bottom of bubble
+      nameT.setPosition(bx, by - bubbleH + pad + 8);
+      bodyT.setPosition(bx, by - bubbleH + pad + 8 + 24);
+    };
+    updatePos();
+    // Register as a tracked bubble so update() can reposition it
+    if(!this._bubbles) this._bubbles=[];
+    const entry={update:updatePos};
+    this._bubbles.push(entry);
+
+    this.time.delayedCall(duration, ()=>{
+      this.tweens.add({targets:all, alpha:0, duration:220,
+        onComplete:()=>{
+          all.forEach(o=>o.destroy());
+          this._bubbles=this._bubbles.filter(b=>b!==entry);
+          if(onDone) onDone();
+        }
+      });
+    });
+  }
+
+  /* ====================================================================
+     MAYO BOSS CUTSCENE
+  ==================================================================== */
+  triggerMayoCutscene(){
+    if(this.cutsceneActive) return;
+    this.cutsceneActive=true; this.allWavesCleared=true;
+
+    const {width,height}=this.scale;
+
+    // Freeze AI
+    if(this.inferno){ this.inferno.isAttacking=false; }
+    if(this.sizer){ this.sizer.isAttacking=false; this.sizer.isMoving=false; }
+
+    // Stop camera following Chase so we can lock the view
+    this.cameras.main.stopFollow();
+
+    // Capture camera position NOW and lock it — everything is positioned relative to this
+    const camLeft = this.cameras.main.scrollX;
+
+    // Fixed screen positions:
+    // Chase = left third (18%), Sizer = center (50%), Mayo will enter at right third (78%)
+    const chaseTargetX = camLeft + width * 0.18;
+    const sizerTargetX = camLeft + width * 0.50;
+
+    // ── Chase walks LEFT to left third ──
+    this.hero.play('hero-walk', true);
+    this.heroFacing = -1; this.hero.setFlipX(true);
+    this.tweens.add({ targets: this.hero, x: chaseTargetX, duration: 1400, ease: 'Linear',
+      onComplete: () => {
+        this.hero.anims.stop(); this.hero.setFrame(0);
+        this.heroFacing = 1; this.hero.setFlipX(false); // face right toward the action
+      }
+    });
+
+    // ── Sizer walks to center — always, no distance guard ──
+    if(this.sizer && !this.sizer.dead){
+      const sizerRunKey = this.sizer.transformed ? 'sizer-run' : 'sizer-walk';
+      this.sizer.facing = Math.sign(sizerTargetX - this.sizer.x) || 1;
+      this.sizer.setFlipX(this.sizer.facing < 0);
+      this.sizer.play(sizerRunKey, true);
+      this.tweens.add({ targets: this.sizer, x: sizerTargetX, duration: 1400, ease: 'Linear',
+        onComplete: () => {
+          this.sizer.anims.stop();
+          this.sizer.facing = 1; this.sizer.setFlipX(false); // face right — Mayo will come from right
+        }
+      });
+    }
+
+    // ── Inferno walks off LEFT ──
+    if(this.inferno && this.inferno.active){
+      this.inferno.alive = false;
+      this.inferno.play('inferno-walk', true);
+      this.inferno.facing = -1; this.inferno.setFlipX(true);
+      this.tweens.add({ targets: this.inferno, x: camLeft - 300, duration: 1800, ease: 'Linear',
+        onComplete: () => { this.inferno.setActive(false).setVisible(false); }
+      });
+    }
+
+    // Wait for movement to finish, then start Mayo intro
+    this.time.delayedCall(1500, () => this.mayoStep1b());
+  }
+
+  mayoStep1b(){
+    // Now play the intro flash/title
+    const {width,height}=this.scale;
+    for(let i=0;i<14;i++){
+      const bolt=this.add.rectangle(
+        Phaser.Math.Between(60,width-60), Phaser.Math.Between(60,height-60),
+        Phaser.Math.Between(3,7), Phaser.Math.Between(50,140), 0xffff00
+      ).setAlpha(0.9).setDepth(1701).setScrollFactor(0).setRotation(Phaser.Math.FloatBetween(-1.5,1.5));
+      this.tweens.add({targets:bolt,alpha:0,scaleY:3,duration:700,onComplete:()=>bolt.destroy()});
+    }
+    const bg=this.add.rectangle(width/2,height/2,width,height,0xff6600).setAlpha(0).setDepth(1700).setScrollFactor(0);
+    this.tweens.add({targets:bg,alpha:0.45,duration:250,yoyo:true,repeat:3,onComplete:()=>bg.destroy()});
+    this.cameras.main.shake(600,0.022);
+
+    const title=this.add.text(width/2,height*0.36,'GENERAL MAYO\nDEFTINWOLF!!!',{
+      fontFamily:'Arial Black',fontSize:'108px',color:'#ff3300',
+      stroke:'#ffff00',strokeThickness:14,align:'center'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1800).setAlpha(0).setScale(0.4);
+    this.tweens.add({targets:title,alpha:1,scaleX:1,scaleY:1,duration:450,ease:'Back.Out',
+      onComplete:()=>this.time.delayedCall(1900,()=>{
+        this.tweens.add({targets:title,alpha:0,duration:350,onComplete:()=>{ title.destroy(); this.mayoStep2(); }});
+      })});
+  }
+
+  mayoStep2(){
+    // Mayo walks in from right, stops at right third
+    const {width,height}=this.scale;
+    const camLeft=this.cameras.main.scrollX; // camera is locked, this is stable
+    const camRight=camLeft+width;
+    this.mayo=this.add.sprite(camRight+120,height*0.78,'mayo_walk').setScale(2.6).setDepth(12);
+    this.mayo.setFlipX(true); this.mayo.play('mayo-walk'); // flipX=true = facing left = walking left
+    const mayoTargetX = camLeft + width*0.78; // right third
+    this.tweens.add({targets:this.mayo, x:mayoTargetX, duration:2200, ease:'Linear',
+      onComplete:()=>{
+        this.mayo.anims.stop(); this.mayo.setFrame(0);
+        this.mayo.setFlipX(true); // face left toward Sizer
+        this.mayoStep3();
+      }});
+  }
+
+  mayoStep3(){
+    // Sizer is already transformed from wave 3 — go straight to Mayo shooting
+    this.mayoStep4();
+  }
+
+  mayoStep4(){
+    if(!this.sizer){ this.mayoStep5(); return; }
+    // Mayo is right of Sizer — always fires left
+    const dir = -1; // Mayo is always on the right, Sizer always on the left
+    this.mayo.setFlipX(true); // face left toward Sizer
+    this.mayo.anims.stop();
+    this.mayo.play('mayo-shoot');
+
+    // Wind-up then fire large projectile
+    this.time.delayedCall(600,()=>{
+      const proj=this.add.circle(this.mayo.x+dir*60, this.mayo.y-20, 18, 0xff6600)
+        .setDepth(300).setStrokeStyle(5,0xffff00);
+      this.tweens.add({targets:proj,scaleX:1.3,scaleY:1.3,duration:80,yoyo:true,repeat:-1});
+
+      const sizerTargetX=this.sizer.x;
+      const sizerTargetY=this.sizer.y;
+      const dist=Math.abs(sizerTargetX-proj.x);
+      const travelTime=Math.max(400,dist/1.2);
+
+      this.tweens.add({
+        targets:proj, x:sizerTargetX, y:sizerTargetY,
+        duration:travelTime, ease:'Linear',
+        onComplete:()=>{
+          proj.destroy();
+          this.cameras.main.shake(700,0.04);
+
+          const ring=this.add.circle(sizerTargetX,sizerTargetY,10,0xff4400,0)
+            .setStrokeStyle(12,0xff8800).setDepth(500);
+          this.tweens.add({targets:ring,scaleX:25,scaleY:25,alpha:0,duration:700,onComplete:()=>ring.destroy()});
+
+          const flash=this.add.rectangle(this.scale.width/2,this.scale.height/2,
+            this.scale.width,this.scale.height,0xff6600)
+            .setAlpha(0.7).setDepth(499).setScrollFactor(0);
+          this.tweens.add({targets:flash,alpha:0,duration:500,onComplete:()=>flash.destroy()});
+
+          [[0,0],[40,-20],[-40,-10],[20,30],[-30,20],[60,10],[-60,-30]].forEach(([ox,oy],i)=>{
+            this.time.delayedCall(i*65,()=>{
+              const boom=this.add.sprite(sizerTargetX+ox,sizerTargetY+oy,'explosion')
+                .setScale(3+Math.random()*1.5).setDepth(400+i);
+              boom.play('explosion-play');
+              boom.once('animationcomplete',()=>boom.destroy());
+            });
+          });
+
+          this.time.delayedCall(120,()=>{
+            if(this.sizer&&this.sizer.active){
+              this.sizer.isAttacking=false;
+              this.sizer.play('sizer-death',true);
+            }
+          });
+
+          this.time.delayedCall(1800,()=>{
+            this.mayo.play('mayo-walk');
+            this.mayoStep5();
+          });
+        }
+      });
+    });
+  }
+
+  mayoStep5(){
+    const {width}=this.scale;
+    this.mayo.setFlipX(false); this.mayo.play('mayo-walk'); // face right, walk off screen right
+    const exitX = this.cameras.main.scrollX + width + 350;
+    this.tweens.add({targets:this.mayo, x:exitX, duration:1900, ease:'Linear',
+      onComplete:()=>{
+        this.mayo.setActive(false).setVisible(false);
+        // Resume camera following Chase
+        this.cameras.main.startFollow(this.hero, true, 0.08, 0.08);
+        this.mayoStep6();
+      }});
+  }
+
+  mayoStep6(){
+    if(!this.sizer){ this.mayoStep7(); return; }
+    const targetX=this.sizer.x+90;
+    this.hero.play('hero-walk',true);
+    this.heroFacing=Math.sign(targetX-this.hero.x)||1;
+    this.hero.setFlipX(this.heroFacing<0);
+    this.tweens.add({targets:this.hero,x:targetX,duration:1600,ease:'Linear',
+      onComplete:()=>{
+        this.hero.anims.stop(); this.hero.setFrame(0);
+        this.time.delayedCall(1500,()=>this.mayoStep7());
+      }});
+  }
+
+  mayoStep7(){
+    const {width}=this.scale;
+    this.hero.play('hero-walk',true); this.hero.setFlipX(false); this.heroFacing=1;
+    this.tweens.add({targets:this.hero,x:this.cameras.main.scrollX+width+500,duration:2000,ease:'Linear',
+      onComplete:()=>this.time.delayedCall(300,()=>this.scene.restart({music:this.music,level:2}))});
+  }
+
+  /* ====================================================================
+     LEVEL 2 COMPLETE — Prise Victory Ritual
+  ==================================================================== */
+  triggerLevel2Complete(){
+    const {width,height}=this.scale;
+    this.cutsceneActive=true;
+
+    this.enemies.forEach(e=>{ if(e.active&&!e.dead){ e.healthBars.forEach(b=>b.destroy()); e.destroy(); }});
+    this.prises.forEach(p=>{ if(p.active) p.priseState='ceremony'; });
+
+    const cx=this.hero.x, cy=this.hero.y-40;
+    const radius=300;
+    const activePrises=this.prises.filter(p=>p.active);
+    const count=activePrises.length||12;
+
+    // ── PHASE 1: Circle up around Chase ──
+    activePrises.forEach((p,i)=>{
+      const angle=(i/count)*Math.PI*2 - Math.PI/2;
+      const tx=cx+Math.cos(angle)*radius, ty=cy+Math.sin(angle)*radius;
+      p.play('prise-run',true);
+      this.tweens.add({targets:p, x:tx, y:ty, duration:1400, ease:'Sine.InOut',
+        onComplete:()=>{
+          p.setFlipX(tx>cx);
+          this.tweens.killTweensOf(p);
+          p.setTexture('prise_attack').setFrame(0);
+        }
+      });
+    });
+
+    // ── PHASE 2: Electrocution shudder — staggered ──
+    this.time.delayedCall(1600,()=>{
+      activePrises.forEach((p,i)=>{
+        this.time.delayedCall(i*100,()=>{
+          if(!p.active) return;
+          this.tweens.add({targets:p,scaleX:3.3,scaleY:2.7,duration:80,yoyo:true,repeat:-1,ease:'Sine.InOut'});
+          this.tweens.add({targets:p,alpha:0.65,duration:110,yoyo:true,repeat:-1});
+        });
+      });
+    });
+
+    // ── PHASE 3: Lightning arcs ──
+    this.time.delayedCall(2000,()=>{
+      const apex={x:cx, y:cy-200};
+      const apexGlow=this.add.circle(apex.x,apex.y,20,0xffffff,0)
+        .setStrokeStyle(5,0x88ffff).setDepth(600).setAlpha(0);
+      this.tweens.add({targets:apexGlow,alpha:1,scaleX:2,scaleY:2,duration:800,ease:'Sine.In'});
+      const lg=this.add.graphics().setDepth(590);
+      this._lightningGraphics=lg;
+      this._lightningApex=apex;
+      this._lightningPrises=activePrises;
+      this._lightningActive=true;
+
+      // ── PHASE 4: Multiplication — ghost copies spawn near each Prise ──
+      this.time.delayedCall(900,()=>{
+        const ghosts=[];
+        activePrises.forEach((p,i)=>{
+          if(!p.active) return;
+          const numCopies=Phaser.Math.Between(1,2);
+          for(let n=0;n<numCopies;n++){
+            this.time.delayedCall(n*220+Phaser.Math.Between(0,280),()=>{
+              if(!p.active) return;
+              const g=this.add.sprite(
+                p.x+Phaser.Math.Between(-70,70),
+                p.y+Phaser.Math.Between(-40,40),
+                'prise_attack',0
+              ).setScale(3.0).setDepth(p.depth-1).setAlpha(0).setFlipX(p.flipX);
+              ghosts.push(g);
+              this.tweens.add({targets:g,alpha:0.8,duration:400,ease:'Sine.Out'});
+              this.tweens.add({targets:g,scaleX:3.2,scaleY:2.8,duration:90,yoyo:true,repeat:-1});
+            });
+          }
+        });
+
+        // ── PHASE 5: Climax burst + ALL ascend ──
+        this.time.delayedCall(1600,()=>{
+          this._lightningActive=false;
+          if(lg.active) lg.destroy();
+          if(apexGlow.active) apexGlow.destroy();
+
+          activePrises.forEach(p=>{ if(p.active){ this.tweens.killTweensOf(p); p.setScale(3.0).setAlpha(1); }});
+
+          this.cameras.main.shake(900,0.04);
+          const burst=this.add.circle(apex.x,apex.y,14,0xffffff).setDepth(620);
+          this.tweens.add({targets:burst,scaleX:30,scaleY:30,alpha:0,duration:800,onComplete:()=>burst.destroy()});
+          const flash=this.add.rectangle(cx,cy,width*2,height*2,0xffffff)
+            .setAlpha(0.9).setDepth(619).setScrollFactor(0);
+          this.tweens.add({targets:flash,alpha:0,duration:1000,onComplete:()=>flash.destroy()});
+          [[0,0],[45,-25],[-45,-20],[30,40],[-35,20],[65,-15],[-60,30]].forEach(([ox,oy],i)=>{
+            this.time.delayedCall(i*50,()=>{
+              const boom=this.add.sprite(apex.x+ox,apex.y+oy,'explosion').setScale(3+i*0.4).setDepth(610+i);
+              boom.play('explosion-play'); boom.once('animationcomplete',()=>boom.destroy());
+            });
+          });
+
+          // Originals + ghosts all ascend to heaven
+          const allAscending=[...activePrises, ...ghosts.filter(g=>g&&g.active)];
+          allAscending.forEach((p,i)=>{
+            this.time.delayedCall(i*40,()=>{
+              if(!p.active) return;
+              this.tweens.killTweensOf(p);
+              if(p.play) p.play('prise-run',true);
+              this.tweens.add({
+                targets:p,
+                y:p.y - height*0.95,
+                x:p.x + Phaser.Math.Between(-100,100),
+                alpha:0,
+                scaleX:p.scaleX*1.5,
+                scaleY:p.scaleY*1.5,
+                duration:1600,
+                ease:'Sine.In',
+                onComplete:()=>{ if(p.active) p.destroy(); }
+              });
+            });
+          });
+
+
+          // ── PHASE 6: TRIUMPH → YOU WIN ──
+          this.time.delayedCall(1200,()=>{
+            const tFlash=this.add.rectangle(width/2,height/2,width,height,0xffffff)
+              .setAlpha(0).setDepth(3000).setScrollFactor(0);
+            this.tweens.add({targets:tFlash,alpha:0.9,duration:220,yoyo:true,repeat:1,
+              onComplete:()=>{
+                tFlash.destroy();
+                const winText=this.add.text(width/2,height/2-90,'THE PRISE CEREMONY\nIS COMPLETE',{
+                  fontFamily:'Arial Black',fontSize:'88px',color:'#ffdd44',
+                  stroke:'#000000',strokeThickness:10,align:'center'
+                }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
+                this.tweens.add({targets:winText,alpha:1,duration:500,ease:'Back.Out'});
+                const subText=this.add.text(width/2,height/2+90,'Chase has won.',{
+                  fontFamily:'Arial Black',fontSize:'44px',color:'#aaddff',
+                  stroke:'#000000',strokeThickness:6
+                }).setOrigin(0.5).setScrollFactor(0).setDepth(3001).setAlpha(0);
+                this.tweens.add({targets:subText,alpha:1,duration:700,delay:500});
+                if(this.music&&this.music.isPlaying)
+                  this.tweens.add({targets:this.music,volume:1.0,duration:500,yoyo:true,hold:1400,delay:300});
+                this.time.delayedCall(3000,()=>{
+                  const playAgain=this.add.text(width/2,height/2+200,'— Play Again —',{
+                    fontFamily:'Arial Black',fontSize:'36px',color:'#ffffff',
+                    stroke:'#000000',strokeThickness:5
+                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3002).setAlpha(0)
+                    .setInteractive({useHandCursor:true});
+                  this.tweens.add({targets:playAgain,alpha:1,duration:600});
+                  playAgain.on('pointerover',()=>playAgain.setColor('#ffdd44'));
+                  playAgain.on('pointerout', ()=>playAgain.setColor('#ffffff'));
+                  playAgain.on('pointerdown',()=>{
+                    if(this.music&&this.music.isPlaying) this.music.stop();
+                    this.scene.start('TitleScene');
+                  });
+                });
+              }
+            });
+          });
+        });
+      });
+    });
+  }
+
+
+  // Called from update() to animate lightning arcs each frame
+  updateLightning(){
+    if(!this._lightningActive||!this._lightningGraphics||!this._lightningGraphics.active) return;
+    const lg=this._lightningGraphics;
+    const apex=this._lightningApex;
+    lg.clear();
+
+    this._lightningPrises.forEach(p=>{
+      if(!p.active) return;
+      // Draw a jagged lightning bolt from Prise toward apex
+      const sx=p.x, sy=p.y-30; // shoot from Prise's head area
+      const ex=apex.x, ey=apex.y;
+      const segments=8;
+      const pts=[{x:sx,y:sy}];
+      for(let i=1;i<segments;i++){
+        const t=i/segments;
+        const bx=sx+(ex-sx)*t;
+        const by=sy+(ey-sy)*t;
+        const jitter=(1-t)*55*(Math.random()-0.5); // more chaos near source, calmer near apex
+        pts.push({x:bx+jitter,y:by+jitter*0.6});
+      }
+      pts.push({x:ex,y:ey});
+
+      // Outer glow stroke
+      lg.lineStyle(5,0x0099ff,0.35);
+      lg.beginPath(); lg.moveTo(pts[0].x,pts[0].y);
+      pts.slice(1).forEach(pt=>lg.lineTo(pt.x,pt.y));
+      lg.strokePath();
+
+      // Inner bright core
+      lg.lineStyle(2,0xeeffff,0.9);
+      lg.beginPath(); lg.moveTo(pts[0].x,pts[0].y);
+      pts.slice(1).forEach(pt=>lg.lineTo(pt.x,pt.y));
+      lg.strokePath();
+    });
+  }
+
+  /* ====================================================================
+     UPDATE
+  ==================================================================== */
+  update(time,delta){
+    if(this.gameOver) return;
+    const move=(this.speed*delta)/1000;
+    let moving=false;
+
+    /* ── Dialogue bubble tracking ── */
+    if(this._bubbles) this._bubbles.forEach(b=>b.update());
+
+    /* ── Chase movement ── */
+    if(!this.isAttacking&&!this.cutsceneActive){
+      const _L=window.IS_MOBILE?window.VPAD.left :this.cursors.left.isDown;
+      const _R=window.IS_MOBILE?window.VPAD.right:this.cursors.right.isDown;
+      const _U=window.IS_MOBILE?window.VPAD.up   :this.cursors.up.isDown;
+      const _D=window.IS_MOBILE?window.VPAD.down :this.cursors.down.isDown;
+      if(_L){  this.hero.x-=move; this.heroFacing=-1; this.hero.setFlipX(true);  moving=true; }
+      else if(_R){ this.hero.x+=move; this.heroFacing=1; this.hero.setFlipX(false); moving=true; }
+      if(_U){   this.hero.y-=move; moving=true; }
+      else if(_D){ this.hero.y+=move; moving=true; }
+    }
+    this.hero.x=Phaser.Math.Clamp(this.hero.x,this.heroMinX,this.heroMaxX);
+    this.hero.y=Phaser.Math.Clamp(this.hero.y,this.heroMinY,this.heroMaxY);
+    if(!this.isAttacking&&!this.cutsceneActive){
+      if(moving) this.hero.play('hero-walk',true);
+      else { this.hero.anims.stop(); this.hero.setFrame(0); }
+    }
+
+    /* ── Wave trigger ── */
+    if(!this.waveCountdownActive&&!this.cutsceneActive){
+      for(let w=this.wavesTriggered;w<this.waveConfig.length;w++){
+        if(w===0) break;
+        if(this.hero.x>=this.waveConfig[w].threshold){ this.startWaveCountdown(w); break; }
+      }
+    }
+
+    /* ── Check all waves cleared ── */
+    if(!this.allWavesCleared&&!this.cutsceneActive
+       &&this.wavesTriggered>=this.waveConfig.length
+       &&this.enemies.filter(e=>e.active&&!e.dead).length===0){
+      if(this.level===1){
+        this.triggerMayoCutscene();
+      } else if(this.level===2&&!this.priseSpawning){
+        // Level 2: only end after Prise spawn phase is also over and enemies cleared
+        this.allWavesCleared=true;
+        this.triggerLevel2Complete();
+      }
+    }
+
+    /* ── Chase attack F ── */
+    const _atkNow=window.IS_MOBILE?window.VPAD.attack:Phaser.Input.Keyboard.JustDown(this.attackKey);
+    if(!this.cutsceneActive&&_atkNow&&!this.isAttacking){
+      this.isAttacking=true;
+      this.hero.setTexture('hero_attack').play('hero-attack');
+      this.time.delayedCall(420,()=>{
+        if(this.gameOver||this.cutsceneActive) return;
+        const fb=this.add.sprite(this.hero.x+this.heroFacing*40,this.hero.y,'fireball').setScale(2).setDepth(120);
+        fb.play('fireball-fly'); fb.vx=this.heroFacing*700; fb.startX=fb.x; fb.maxRange=1200;
+        this.fireballs.add(fb);
+      });
+    }
+
+    /* ── Power G ── */
+    const _pwrNow=window.IS_MOBILE?window.VPAD.power:Phaser.Input.Keyboard.JustDown(this.powerKey);
+    if(!this.cutsceneActive&&_pwrNow){
+      if(this.heroPower>=this.heroPowerMax) this.firePowerBlast();
+      else { this.powerHint.setColor('#ff3333'); this.time.delayedCall(350,()=>this.powerHint.setColor('#335577')); }
+    }
+
+    // Power bars
+    const pips=this.heroPowerMax/10;
+    this.heroPowerBars.forEach((bar,i)=>bar.setAlpha(this.heroPower>=(i+1)*pips?1:0.2));
+    const hitsLeft=Math.ceil((this.heroPowerMax-this.heroPower)/2);
+    const blastLabel=this.level===2?'[G] SUMMON THE PRISE':'[G] POWER BLAST';
+    if(this.heroPower>=this.heroPowerMax) this.powerHint.setText(blastLabel+' — READY!').setColor('#00ccff');
+    else this.powerHint.setText(`${blastLabel} — ${hitsLeft} hit${hitsLeft!==1?'s':''} to charge`).setColor('#335577');
+
+    /* ── Chase fireballs ── */
+    if(!this._dialoguePause) this.fireballs.children.each(fb=>{
+      if(!fb.active) return;
+      fb.x+=fb.vx*(delta/1000);
+      this.barrels.forEach(b=>{
+        if(!b.active||!fb.active) return;
+        if(Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),b.getBounds())){
+          const bx=b.x, by=b.y; b.destroy(); fb.destroy();
+          this.explode(bx,by,true);
+          // Barrel blast kills all enemies within 300px
+          this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+            if(Phaser.Math.Distance.Between(bx,by,e.x,e.y)<300){
+              e.dead=true; e.healthBars.forEach(bar=>bar.destroy());
+              this.explode(e.x,e.y,false);
+              e.setTexture('enemy_death').setFrame(0); e.play('enemy-death');
+              e.once('animationcomplete-enemy-death',()=>{ e.anims.stop(); e.setFrame(6); });
+              this.heroPower=Math.min(this.heroPower+2,this.heroPowerMax);
+            }
+          });
+        }
+      });
+      this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+        if(!fb.active) return;
+        if(Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),e.getBounds())){
+          e.hp--; e.healthBars[e.hp]?.destroy(); this.cameras.main.shake(80,0.005); fb.destroy();
+          this.heroPower=Math.min(this.heroPower+2,this.heroPowerMax);
+          if(e.hp<=0){
+            e.dead=true;
+            e.healthBars.forEach(b=>b.destroy());
+            e.setTexture('enemy_death').setFrame(0);
+            e.play('enemy-death');
+            e.once('animationcomplete-enemy-death',()=>{
+              e.anims.stop();
+              e.setFrame(6); // hold on last frame
+            });
+          }
+        }
+      });
+      if(fb.active&&Math.abs(fb.x-fb.startX)>fb.maxRange) fb.destroy();
+    });
+
+    /* ── INFERNO AI ── */
+    if(this.inferno&&this.inferno.active&&this.inferno.alive&&!this.cutsceneActive&&!this._dialoguePause){
+      // Check for nearby enemy first — if one exists, face & shoot regardless of movement
+      const iEnemy=this.findNearestEnemy(this.inferno.x,this.inferno.y,true);
+
+      // Loose follow — only drift back toward Chase if very far away (>350px)
+      if(!this.inferno.isAttacking){
+        const itx=this.hero.x-this.heroFacing*220, ity=this.hero.y+12;
+        const idist=Phaser.Math.Distance.Between(this.inferno.x,this.inferno.y,itx,ity);
+        if(idist>350){
+          const spd=move*1.0;
+          const dx=itx-this.inferno.x, dy=ity-this.inferno.y;
+          this.inferno.x+=Math.sign(dx)*Math.min(spd,idist*0.08+spd*0.3);
+          this.inferno.y+=Math.sign(dy)*Math.min(spd*0.35,Math.abs(dy));
+          // Only update facing/flip when actually moving a meaningful distance — prevents chatter
+          if(Math.abs(dx)>80){
+            const newFacing=Math.sign(dx);
+            if(newFacing!==this.inferno.facing){ this.inferno.facing=newFacing; this.inferno.setFlipX(newFacing<0); }
+          }
+          this.inferno.play('inferno-walk',true);
+        } else if(!iEnemy){
+          // In range and no enemy — idle, face same way as Chase
+          this.inferno.anims.stop(); this.inferno.setFrame(0);
+          if(this.heroFacing!==this.inferno.facing){ this.inferno.facing=this.heroFacing; this.inferno.setFlipX(this.heroFacing<0); }
+        }
+      }
+
+      // Face nearest enemy when shooting (overrides follow facing)
+      if(iEnemy&&!this.inferno.isAttacking){
+        const edir=Math.sign(iEnemy.x-this.inferno.x);
+        if(edir&&edir!==this.inferno.facing){ this.inferno.facing=edir; this.inferno.setFlipX(edir<0); }
+      }
+
+      // Fire cooldown — much faster: 400-700ms
+      this.inferno.fireCooldown-=delta;
+      if(this.inferno.fireCooldown<=0&&!this.inferno.isAttacking){
+        if(iEnemy&&Phaser.Math.Distance.Between(this.inferno.x,this.inferno.y,iEnemy.x,iEnemy.y)<900){
+          this.infernoFire(); this.inferno.fireCooldown=Phaser.Math.Between(400,700);
+        } else { this.inferno.fireCooldown=200; }
+      }
+    }
+
+    /* ── Inferno fireballs — explosive on contact, 500px kill radius ── */
+    this.infernoFireballs.children.each(fb=>{
+      if(!fb.active) return;
+      fb.x+=fb.vx*(delta/1000);
+      if(fb.glowObj&&fb.glowObj.active){ fb.glowObj.x=fb.x; fb.glowObj.y=fb.y; }
+      let hit=false;
+      this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+        if(!fb.active||hit) return;
+        if(Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),e.getBounds())){
+          hit=true;
+          const hx=fb.x, hy=fb.y;
+          if(fb.glowObj&&fb.glowObj.active) fb.glowObj.destroy();
+          fb.destroy();
+          // Barrel-scale explosion at impact
+          this.cameras.main.shake(300,0.02);
+          const ring=this.add.circle(hx,hy,10,0xff6600,0).setStrokeStyle(8,0xffaa00).setDepth(500);
+          this.tweens.add({targets:ring,scaleX:20,scaleY:20,alpha:0,duration:500,onComplete:()=>ring.destroy()});
+          [[0,0],[30,-15],[-30,-10],[20,25],[-25,15]].forEach(([ox,oy],i)=>{
+            this.time.delayedCall(i*50,()=>{
+              const boom=this.add.sprite(hx+ox,hy+oy,'explosion').setScale(2.5).setDepth(400+i);
+              boom.play('explosion-play'); boom.once('animationcomplete',()=>boom.destroy());
+            });
+          });
+          // Kill all enemies within 500px — play death anim, keep bodies
+          this.enemies.filter(ee=>ee.active&&!ee.dead).forEach(ee=>{
+            if(Phaser.Math.Distance.Between(hx,hy,ee.x,ee.y)<500){
+              ee.dead=true; ee.healthBars.forEach(b=>b.destroy());
+              ee.setTexture('enemy_death').setFrame(0); ee.play('enemy-death');
+              ee.once('animationcomplete-enemy-death',()=>{ ee.anims.stop(); ee.setFrame(6); });
+              this.heroPower=Math.min(this.heroPower+2,this.heroPowerMax);
+            }
+          });
+        }
+      });
+      if(fb.active&&Math.abs(fb.x-fb.startX)>=fb.maxRange){
+        // Miss — small fizzle at end of range
+        const hx=fb.x, hy=fb.y; if(fb.glowObj&&fb.glowObj.active) fb.glowObj.destroy(); fb.destroy();
+        const boom=this.add.sprite(hx,hy,'explosion').setScale(1.5).setDepth(300);
+        boom.play('explosion-play'); boom.once('animationcomplete',()=>boom.destroy());
+      }
+    });
+
+    /* ── SIZER AI ── */
+    if(this.sizer&&this.sizer.active&&!this.sizer.transforming&&!this.sizer.dead&&!this.cutsceneActive){
+      if(!this.sizer.transformed){
+        const stx=this.hero.x-this.heroFacing*280, sty=this.hero.y+8;
+        const sdx=stx-this.sizer.x, sdy=sty-this.sizer.y, sdist=Math.hypot(sdx,sdy);
+        if(sdist>200){
+          this.sizer.x+=Math.sign(sdx)*Math.min(move*0.75,sdist*0.08+move*0.3);
+          this.sizer.y+=Math.sign(sdy)*Math.min(move*0.30,Math.abs(sdy));
+          // Facing hysteresis — only flip after moving >120px in new direction
+          if(Math.abs(sdx)>120){ const nf=Math.sign(sdx); if(nf!==this.sizer.facing){this.sizer.facing=nf;this.sizer.setFlipX(nf<0);} }
+          this.sizer.play('sizer-walk',true); this.sizer.isMoving=true;
+        } else if(this.sizer.isMoving){
+          this.sizer.anims.stop(); this.sizer.setTexture('sizer_walk').setFrame(0); this.sizer.isMoving=false;
+        }
+      } else {
+        // Monster: on-screen enemies only
+        const target=this.findNearestEnemy(this.sizer.x,this.sizer.y,true);
+        if(target){
+          const sdx=target.x-this.sizer.x, sdy=target.y-this.sizer.y, sdist=Math.hypot(sdx,sdy);
+          this.sizer.facing=Math.sign(sdx)||this.sizer.facing; this.sizer.setFlipX(this.sizer.facing<0);
+          if(sdist>130&&!this.sizer.isAttacking){
+            this.sizer.x+=Math.sign(sdx)*move*1.4; this.sizer.y+=Math.sign(sdy)*move*0.65;
+            this.sizer.play('sizer-run',true); this.sizer.isMoving=true;
+          } else if(sdist<=130){
+            this.sizer.attackCooldown-=delta;
+            if(this.sizer.attackCooldown<=0&&!this.sizer.isAttacking){
+              this.sizerMelee(); this.sizer.attackCooldown=Phaser.Math.Between(600,900);
+            }
+            if(!this.sizer.isAttacking){ this.sizer.anims.stop(); this.sizer.setTexture('sizer_run').setFrame(0); this.sizer.isMoving=false; }
+          }
+        } else {
+          // No on-screen enemies — loosely follow group (large deadzone)
+          const gx=this.inferno&&this.inferno.active?(this.hero.x+this.inferno.x)/2:this.hero.x;
+          const fx=gx+200, fy=this.hero.y+30;
+          const sdx=fx-this.sizer.x, sdy=fy-this.sizer.y, sdist=Math.hypot(sdx,sdy);
+          if(sdist>250){
+            this.sizer.x+=Math.sign(sdx)*move*1.0; this.sizer.y+=Math.sign(sdy)*move*0.4;
+            if(Math.abs(sdx)>100){ const nf=Math.sign(sdx); if(nf!==this.sizer.facing){this.sizer.facing=nf;this.sizer.setFlipX(nf<0);} }
+            this.sizer.play('sizer-run',true); this.sizer.isMoving=true;
+          } else if(!this.sizer.isAttacking&&this.sizer.isMoving){
+            this.sizer.anims.stop(); this.sizer.setTexture('sizer_run').setFrame(0); this.sizer.isMoving=false;
+          }
+        }
+      }
+      // Enemy fireballs hit Sizer — invincible, absorb silently
+      if(!this._dialoguePause) this.enemyFireballs.children.each(fb=>{
+        if(!fb.active) return;
+        if(Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),this.sizer.getBounds()))
+          { fb.destroy(); }
+      });
+    }
+
+    /* ── Enemy fireballs ── */
+    this.enemyFireballs.children.each(fb=>{
+      if(!fb.active) return;
+      fb.x+=fb.vx*(delta/1000);
+      if(Math.abs(fb.x-fb.startX)>=fb.maxRange){
+        this.tweens.add({targets:fb,alpha:0,duration:120,onComplete:()=>{ if(fb.active) fb.destroy(); }}); return;
+      }
+      if(!this.cutsceneActive&&!this.heroInvincible&&Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),this.hero.getBounds()))
+        { fb.destroy(); this.damageHero(); return; }
+      if(this.inferno&&this.inferno.active&&this.inferno.alive&&
+         Phaser.Geom.Intersects.RectangleToRectangle(fb.getBounds(),this.inferno.getBounds()))
+        { fb.destroy(); return; }
+      if(fb.active&&(fb.x<-200||fb.x>this.worldWidth+200)) fb.destroy();
+    });
+
+    /* ── Enemy AI ── */
+    this.enemies=this.enemies.filter(e=>e.active);
+    if(!this._dialoguePause) this.enemies.filter(e=>!e.dead).forEach(e=>{
+      if(!e.active) return;
+      const dx=this.hero.x-e.x, dy=this.hero.y-e.y;
+      e.x+=Math.sign(dx)*move*0.25; e.y+=Math.sign(dy)*move*0.15;
+      e.wanderTimer-=delta;
+      if(e.wanderTimer<=0){ e.wanderX=Phaser.Math.Between(-1,1)||1; e.wanderY=Phaser.Math.Between(-1,1)||1; e.wanderTimer=Phaser.Math.Between(1000,3000); }
+      e.x+=e.wanderX*move*0.1; e.y+=e.wanderY*move*0.08;
+      e.setFlipX(e.x>this.hero.x);
+      e.fireCooldown-=delta;
+      if(e.fireCooldown<=0&&Math.abs(dx)<550){ this.spawnEnemyFireball(e); e.fireCooldown=Phaser.Math.Between(1200,2600); }
+      e.healthBars.forEach((bar,i)=>{ bar.x=e.x-10+i*10; bar.y=e.y-50; });
+    }); // end !_dialoguePause enemy forEach
+
+    /* ── One-way separation: Chase pushes companions, never pushed back ── */
+    this.pushAway(this.hero,this.inferno,this.SEPARATION_RADIUS);
+    this.pushAway(this.hero,this.sizer,this.SEPARATION_RADIUS);
+    if(this.inferno&&this.sizer) this.pushAway(this.inferno,this.sizer,this.SEPARATION_RADIUS);
+
+    this.enemies=this.enemies.filter(e=>e.active);
+
+    /* ── PRISE AI ── */
+    if(this.prises.length>0) this.updatePrises(delta);
+
+    /* ── LIGHTNING arcs during victory ritual ── */
+    if(this._lightningActive) this.updateLightning();
+
+    /* ── Endless enemy spawn while Prise is active ── */
+    if(this.priseSpawning){
+      this.priseSpawnTimer-=delta;
+      if(!this._priseEnemyTimer) this._priseEnemyTimer=0;
+      this._priseEnemyTimer-=delta;
+      if(this._priseEnemyTimer<=0){
+        // Spawn 2-3 enemies from off-screen edges
+        const {height}=this.scale;
+        const camLeft=this.cameras.main.scrollX;
+        const camRight=camLeft+this.scale.width;
+        const count=Phaser.Math.Between(2,3);
+        for(let i=0;i<count;i++){
+          const fromRight=Math.random()>0.5;
+          const sx=fromRight?camRight+60+Phaser.Math.Between(0,100):camLeft-60-Phaser.Math.Between(0,100);
+          const sy=Phaser.Math.Between(height*0.63,height*0.88);
+          const e=this.add.sprite(sx,sy,'enemy_walk').setScale(2).setDepth(10);
+          e.hp=1; e.play('enemy-walk'); // die in one blow
+          e.wanderX=fromRight?-1:1; e.wanderY=0;
+          e.wanderTimer=9999; e.fireCooldown=9999; // don't shoot during Prise phase
+          e.healthBars=[];
+          this.enemies.push(e);
+        }
+        this._priseEnemyTimer=Phaser.Math.Between(600,1000);
+      }
+    }
+  }
+}
+
+/* =====================================================================
+   CLAUDIO SCENE — Neighbourhood walk intro
+===================================================================== */
+class ClaudioScene extends Phaser.Scene {
+  constructor(){ super('ClaudioScene'); }
+
+  init(data){ this._music = data.music; }
+
+  preload(){
+    this.load.image('street_wide', 'assets/bg/BGstreet1_wide.png');
+    this.load.spritesheet('claudio_walk', 'assets/claudio/claudio_walk.png', {frameWidth:256, frameHeight:256});
+    this.load.audio('crowing', 'assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3');
+    this.load.on('loaderror', f => console.error('LOAD ERROR:', f.key, f.url));
+  }
+
+  create(){
+    const {width, height} = this.scale;
+
+    // ── Background ──
+    const bgW = Math.round(4608 * (height / 1024));
+    this.worldWidth = bgW;
+    this.add.image(bgW/2, height/2, 'street_wide').setDisplaySize(bgW, height).setDepth(0);
+    this.cameras.main.setBounds(0, 0, bgW, height);
+
+    // ── Animation ──
+    if(!this.anims.exists('claudio-walk'))
+      this.anims.create({key:'claudio-walk', frames:this.anims.generateFrameNumbers('claudio_walk',{start:0,end:15}), frameRate:10, repeat:-1});
+
+    // ── Claudio ──
+    const groundY = height * 0.83;
+    this.claudio = this.add.sprite(-100, groundY, 'claudio_walk').setScale(2.0).setDepth(10);
+
+    // ── Camera ──
+    this.cameras.main.startFollow(this.claudio, true, 0.1, 0.1);
+
+    // ── Keys — add individually so they work regardless of focus ──
+    this.keyLeft  = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
+    this.keyRight = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
+    this.input.keyboard.addCapture([
+      Phaser.Input.Keyboard.KeyCodes.LEFT,
+      Phaser.Input.Keyboard.KeyCodes.RIGHT,
+      Phaser.Input.Keyboard.KeyCodes.UP,
+      Phaser.Input.Keyboard.KeyCodes.DOWN,
+    ]);
+
+    this.walkSpeed = 300;
+    this._transitioning = false;
+    this._rightEdge = bgW - 80;
+    this._playerControl = false;
+
+    // ── Walk-in tween: Claudio enters from left, stops at ~20% of screen ──
+    this.claudio.play('claudio-walk', true);
+    this.tweens.add({
+      targets: this.claudio,
+      x: width * 0.20,
+      duration: 2000,
+      ease: 'Linear',
+      onComplete: () => {
+        this.claudio.anims.stop();
+        this.claudio.setFrame(0);
+        this._playerControl = true;  // hand off to player
+      }
+    });
+
+    // ── Fade in ──
+    this.cameras.main.fadeIn(700, 0, 0, 0);
+
+    // ── Music: fade out title theme, start crowing at half volume ──
+    [this._music, this.sound.get('theme')].forEach(s => {
+      if(s && s.isPlaying)
+        this.tweens.add({targets:s, volume:0, duration:900, onComplete:()=>s.stop()});
+    });
+    this.time.delayedCall(1000, () => {
+      this._crowing = this.sound.add('crowing', {loop:true, volume:0});
+      this._crowing.play();
+      this.tweens.add({targets:this._crowing, volume:0.35, duration:1500});
+    });
+  }
+
+  update(time, delta){
+    if(!this._playerControl || this._transitioning) return;
+
+    const spd = this.walkSpeed * (delta / 1000);
+    let moving = false;
+
+    const _cL=window.IS_MOBILE?window.VPAD.left :this.keyLeft.isDown;
+    const _cR=window.IS_MOBILE?window.VPAD.right:this.keyRight.isDown;
+    if(_cL){
+      this.claudio.x -= spd;
+      this.claudio.setFlipX(true);
+      moving = true;
+    } else if(_cR){
+      this.claudio.x += spd;
+      this.claudio.setFlipX(false);
+      moving = true;
+    }
+
+    this.claudio.x = Phaser.Math.Clamp(this.claudio.x, 50, this._rightEdge);
+
+    // Only toggle animation on state change to avoid fighting Phaser's anim manager
+    if(moving && !this._wasMoving){
+      this.claudio.play('claudio-walk');  // no ignoreIfPlaying flag = always restart fresh
+    } else if(!moving && this._wasMoving){
+      this.claudio.anims.stop();
+      this.claudio.setFrame(0);
+    }
+    this._wasMoving = moving;
+
+    // Right edge → next scene
+    if(this.claudio.x >= this._rightEdge){
+      this._transitioning = true;
+      this.cameras.main.fadeOut(600, 0, 0, 0);
+      this.time.delayedCall(650, () => this.scene.start('CloseupScene', {crowing:this._crowing}));
+    }
+  }
+}
+
+/* =====================================================================
+   CLOSEUP SCENE — Front of house, story setup
+===================================================================== */
+/* =====================================================================
+   CLOSEUP SCENE — BGstreet2, Claudio walks then kneels, thought bubbles
+===================================================================== */
+class CloseupScene extends Phaser.Scene {
+  constructor(){ super('CloseupScene'); }
+
+  init(data){ this._crowing=data.crowing; }
+
+  preload(){
+    this.load.image('street_closeup','assets/bg/BGstreet2.png');
+    this.load.spritesheet('claudio_walk','assets/claudio/claudio_walk.png',{frameWidth:256,frameHeight:256});
+    this.load.spritesheet('claudio_back','assets/claudio/claudio_back.png',{frameWidth:256,frameHeight:256});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.add.image(width/2,height/2,'street_closeup').setDisplaySize(width,height).setDepth(0);
+
+    const A=this.anims;
+    if(!A.exists('claudio-walk'))
+      A.create({key:'claudio-walk',frames:A.generateFrameNumbers('claudio_walk',{start:0,end:15}),frameRate:10,repeat:-1});
+    if(!A.exists('claudio-back-walk'))
+      A.create({key:'claudio-back-walk',frames:A.generateFrameNumbers('claudio_back',{start:0,end:6}),frameRate:10,repeat:-1});
+    if(!A.exists('claudio-kneel'))
+      A.create({key:'claudio-kneel',frames:A.generateFrameNumbers('claudio_back',{start:7,end:10}),frameRate:8,repeat:0});
+
+    const groundY=height*0.82;
+
+    // Phase 1: Claudio enters from left FACING RIGHT (front walk sprite)
+    this.claudio=this.add.sprite(-180,groundY,'claudio_walk',0).setScale(2.2).setDepth(10);
+    const leftThird=width*0.30;
+
+    this.claudio.play('claudio-walk',true);
+    this.tweens.add({
+      targets:this.claudio, x:leftThird,
+      duration:(leftThird+180)/260*1000, ease:'Linear',
+      onComplete:()=>{
+        // Phase 2: Swap to back-perspective sprite, walk forward (toward house)
+        this.claudio.setTexture('claudio_back').setFrame(0);
+        this.claudio.play('claudio-back-walk',true);
+        // Walk a short distance forward (increase Y slightly to look like walking toward BG)
+        this.tweens.add({
+          targets:this.claudio, x:leftThird+60,
+          duration:600, ease:'Linear',
+          onComplete:()=>{
+            // Phase 3: Kneel
+            this.claudio.play('claudio-kneel',true);
+            this.claudio.once('animationcomplete-claudio-kneel',()=>{
+              this.claudio.anims.stop();
+              this.claudio.setFrame(10);
+              // Begin thought bubble sequence
+              this.time.delayedCall(400,()=>this._runThoughtBubbles());
+            });
+          }
+        });
+      }
+    });
+    this.cameras.main.fadeIn(700,0,0,0);
+  }
+
+  _showBubble(text, onDone, duration){
+    const {width,height}=this.scale;
+    const pad=18, bubbleW=460, lineH=26;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/11);
+    const lines=text.split('\n');
+    let totalLines=0;
+    lines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
+    const bubbleH=pad*2+totalLines*lineH+16;
+
+    // Anchor bubble above Claudio's head, slightly right
+    const bx=this.claudio.x+50;
+    const by=this.claudio.y - this.claudio.displayHeight*0.6 - 20;
+
+    // Tail connector circle (thought bubble dots)
+    const dots=[];
+    for(let d=0;d<3;d++){
+      const dr=5-d*1.4;
+      const dot=this.add.circle(bx-10+d*10, by+bubbleH/2+8+d*14, dr, 0xffffff,0.92).setDepth(2101);
+      dots.push(dot);
+    }
+
+    const bg=this.add.rectangle(bx,by,bubbleW,bubbleH,0xffffff,0.93)
+      .setStrokeStyle(3,0x334466).setOrigin(0.5,1).setDepth(2100);
+    const txt=this.add.text(bx,by-bubbleH+pad,text,{
+      fontFamily:'Georgia,serif', fontSize:'20px', color:'#111133',
+      wordWrap:{width:bubbleW-pad*2}, align:'left'
+    }).setOrigin(0.5,0).setDepth(2102);
+
+    const all=[bg,txt,...dots];
+    all.forEach(o=>o.setAlpha(0));
+    this.tweens.add({targets:all,alpha:1,duration:300});
+
+    this.time.delayedCall(duration,()=>{
+      this.tweens.add({targets:all,alpha:0,duration:280,
+        onComplete:()=>{ all.forEach(o=>o.destroy()); if(onDone) onDone(); }});
+    });
+  }
+
+  _runThoughtBubbles(){
+    // Very slow zoom during the thought bubble sequence (~50s total)
+    this.cameras.main.zoomTo(1.22, 52000, 'Linear', false);
+    const bubbles=[
+      ["She's still beautiful.",                                                                              4500],
+      ["Even after all these years...\nAfter everything we've been through...",                              5500],
+      ["How does she manage it?",                                                                             4000],
+      ["I should ask her. I should say,\n\"Newo, how do you do it?\"",                                      5500],
+      ["And she'll say \"who is this?\"",                                                                    4000],
+      ["And I'll say Claudio.",                                                                               3500],
+      ["And she'll say \"Oh my god, Claudio,\nYou're... You're safe! You're...\"",                          6000],
+      ["\"Where are you, Claudio? Come to me,\nlet's make up for lost time.\"",                             6000],
+      ["That's exactly what she would say.",                                                                  4500],
+      ["Will say.",                                                                                           3500],
+    ];
+
+    let i=0;
+    const next=()=>{
+      if(i>=bubbles.length){
+        // All bubbles done — fade to BGstreet3 scene
+        this.time.delayedCall(800,()=>{
+          this.cameras.main.fadeOut(800,0,0,0);
+          this.time.delayedCall(850,()=>{
+            this.scene.start('Street3Scene',{crowing:this._crowing});
+          });
+        });
+        return;
+      }
+      const [text,dur]=bubbles[i++];
+      // Gap between bubbles
+      this.time.delayedCall(300,()=>this._showBubble(text,next,dur));
+    };
+    next();
+  }
+}
+
+/* =====================================================================
+   STREET 3 SCENE — Claudio kneeling, faces camera, dog enters
+===================================================================== */
+class Street3Scene extends Phaser.Scene {
+  constructor(){ super('Street3Scene'); }
+
+  init(data){ this._crowing=data.crowing; }
+
+  preload(){
+    this.load.image('street3','assets/bg/BGstreet3.png');
+    this.load.image('claudio_cam',      'assets/claudio/claudio_crouch_cam.png');
+    this.load.image('claudio_nothappy', 'assets/claudio/claudio_crouch_nothappy.png');
+    this.load.image('claudio_apollo',   'assets/claudio/claudio_crouch_apollo.png');
+    this.load.spritesheet('apollo_sit',     'assets/apollo/apollo_sit.png',     {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('apollo_idle',    'assets/apollo/apollo_idle.png',    {frameWidth:128,frameHeight:128});
+    this.load.spritesheet('apollo_running', 'assets/apollo/apollo_running.png', {frameWidth:128,frameHeight:128});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+
+    this.add.image(width/2,height/2,'street3').setDisplaySize(width,height).setDepth(0);
+
+    const A=this.anims;
+    if(!A.exists('apollo-sit'))
+      A.create({key:'apollo-sit',     frames:A.generateFrameNumbers('apollo_sit',    {start:4,end:15}),frameRate:10,repeat:0});
+    if(!A.exists('apollo-idle'))
+      A.create({key:'apollo-idle',    frames:A.generateFrameNumbers('apollo_idle',   {start:0,end:15}),frameRate:6, repeat:-1});
+    if(!A.exists('apollo-running'))
+      A.create({key:'apollo-running', frames:A.generateFrameNumbers('apollo_running',{start:0,end:15}),frameRate:12,repeat:-1});
+
+    // Ground level for this BG — slightly higher because grass is in foreground
+    const groundY=height*0.78;
+
+    // Claudio — facing camera, centered left-third
+    const claudioX=width*0.32;
+    this.claudio=this.add.image(claudioX,groundY,'claudio_cam')
+      .setScale(2.5).setOrigin(0.5,1).setDepth(10);
+
+    this.cameras.main.fadeIn(700,0,0,0);
+
+    // Very slow zoom in over 6 seconds
+    this.cameras.main.zoomTo(1.18, 6000, 'Linear', false);
+
+    // After 6s: growl graphic
+    this.time.delayedCall(6000,()=>this._doGrowl());
+  }
+
+  _doGrowl(){
+    const {width,height}=this.scale;
+
+    // Rumble camera
+    this.cameras.main.shake(400,0.006);
+
+    // Growl text — jagged red
+    const growl=this.add.text(width*0.5,height*0.35,
+      'GRRRRRRRRRRrrrrrrrr.....',
+      {fontFamily:'Arial Black', fontSize:'64px', color:'#cc1111',
+       stroke:'#330000', strokeThickness:8}
+    ).setOrigin(0.5).setScrollFactor(0).setDepth(500).setAlpha(0);
+
+    // Slight scale jitter for impact
+    this.tweens.add({targets:growl, alpha:1, scaleX:1.05, scaleY:0.95, duration:180,
+      onComplete:()=>{
+        this.tweens.add({targets:growl, scaleX:1, scaleY:1, duration:120});
+      }
+    });
+
+    this.time.delayedCall(1800,()=>{
+      this.tweens.add({targets:growl, alpha:0, duration:300,
+        onComplete:()=>{ growl.destroy(); this._switchToNotHappy(); }});
+    });
+  }
+
+  _switchToNotHappy(){
+    const {width,height}=this.scale;
+    const groundY=height*0.78;
+    const claudioX=width*0.32;
+
+    // Swap to not-happy image
+    this.claudio.destroy();
+    this.claudio=this.add.image(claudioX,groundY,'claudio_nothappy')
+      .setScale(2.5).setOrigin(0.5,1).setDepth(10);
+
+    // Stop the slow zoom, reset camera gently
+    this.cameras.main.zoomTo(1.0, 800, 'Linear');
+
+    // Apollo enters from right
+    this.time.delayedCall(300,()=>this._apolloEnters());
+  }
+
+  _apolloEnters(){
+    const {width,height}=this.scale;
+    // Claudio is at width*0.32, Apollo stops just to his right, faces left = toward Claudio
+    const groundY=height*0.80;
+    const stopX=width*0.56;
+
+    this.apollo=this.add.sprite(width+150,groundY,'apollo_running',0)
+      .setScale(4.5).setOrigin(0.5,1).setDepth(11).setFlipX(true); // running left
+    this.apollo.play('apollo-running',true);
+
+    this.tweens.add({
+      targets:this.apollo, x:stopX,
+      duration:(width+150-stopX)/400*1000, ease:'Linear',
+      onComplete:()=>{
+        // Play sit-down transition (frames 4-15), then switch to idle loop
+        this.apollo.setFlipX(true); // face left = toward Claudio
+        this.apollo.play('apollo-sit');
+        this.apollo.once('animationcomplete-apollo-sit', ()=>{
+          this.apollo.play('apollo-idle'); // proper idle loop
+          this.time.delayedCall(800,()=>this._claudioSmiles());
+        });
+      }
+    });
+  }
+
+  _claudioSmiles(){
+    const {width,height}=this.scale;
+    const groundY=height*0.78;
+    const claudioX=width*0.32;
+
+    // Crossfade to smiling image
+    const newImg=this.add.image(claudioX,groundY,'claudio_apollo')
+      .setScale(2.5).setOrigin(0.5,1).setDepth(10).setAlpha(0);
+    this.tweens.add({targets:newImg, alpha:1, duration:400,
+      onComplete:()=>{ this.claudio.destroy(); this.claudio=newImg; }
+    });
+
+    // Hold for a few seconds — placeholder for next scene/dialogue
+    // For now, any key advances to GameScene
+    this.time.delayedCall(1000,()=>{
+      const prompt=this.add.text(width/2,height*0.93,'Press any key to continue...',
+        {fontFamily:'Arial',fontSize:'22px',color:'#aaaaee'}
+      ).setOrigin(0.5).setAlpha(0.8).setScrollFactor(0).setDepth(200);
+      this.tweens.add({targets:prompt,alpha:0.1,duration:700,yoyo:true,repeat:-1});
+      this._ready=true;
+      const advance=()=>{
+        if(!this._ready) return;
+        this._ready=false;
+        // Fade out crowing music before switching to Chase's scene
+        if(this._crowing && this._crowing.isPlaying){
+          this.tweens.add({targets:this._crowing, volume:0, duration:700,
+            onComplete:()=>this._crowing.stop()});
+        }
+        this.cameras.main.fadeOut(700,0,0,0);
+        this.time.delayedCall(750,()=>{
+          // Pass null so GameScene starts InKeeping theme fresh
+          this.scene.start('GameScene',{music:null, level:1});
+        });
+      };
+      this.input.keyboard.on('keydown',advance);
+      this.input.on('pointerdown',advance);
+    });
+  }
+}
+
+
+
+/* =====================================================================
+   GODDER DAM SCENE  —  Level 3
+   Assets: assets/bg/godderdamconceptpieces.png  (1536x1024)
+           assets/claudio/claudio_walk.png
+           assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3
+===================================================================== */
+new Phaser.Game({
+  type:Phaser.AUTO, width:1920, height:1080, pixelArt:true,
+  scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
+  scene:[TitleScene,ClaudioScene,CloseupScene,Street3Scene,GameScene]
+});
+</script>
+
+
+<!-- ── MOBILE TOUCH CONTROLS ─────────────────────────────────────────────── -->
+<style>
+/* Joystick zone indicators — purely visual, low opacity */
+#vpad-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: opacity 0.6s ease;
+}
+/* Left half touch zone (invisible, pointer-events on) */
+#vpad-left-zone {
+  position: absolute;
+  left: 0; top: 0;
+  width: 50%; height: 100%;
+  pointer-events: all;
+  touch-action: none;
+}
+/* Right half touch zone */
+#vpad-right-zone {
+  position: absolute;
+  right: 0; top: 0;
+  width: 50%; height: 100%;
+  pointer-events: all;
+  touch-action: none;
+}
+/* Joystick base — appears where thumb lands */
+#vjoy-base {
+  position: absolute;
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.08);
+  border: 2px solid rgba(255,255,255,0.25);
+  pointer-events: none;
+  display: none;
+  transform: translate(-50%, -50%);
+}
+/* Joystick thumb */
+#vjoy-thumb {
+  position: absolute;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.30);
+  border: 2px solid rgba(255,255,255,0.55);
+  pointer-events: none;
+  display: none;
+  transform: translate(-50%, -50%);
+}
+/* Right zone hint — tiny tap ripple indicator */
+#vpad-tap-hint {
+  position: absolute;
+  right: 60px; bottom: 80px;
+  width: 64px; height: 64px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.15);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: rgba(255,255,255,0.20);
+  font-family: Arial, sans-serif;
+  text-align: center;
+  line-height: 1.3;
+}
+/* Ripple on tap */
+.tap-ripple {
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.25);
+  animation: ripple 0.4s ease-out forwards;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+@keyframes ripple {
+  from { width: 20px; height: 20px; opacity: 0.7; }
+  to   { width: 100px; height: 100px; opacity: 0; }
+}
+</style>
+
+<div id="vpad-overlay">
+  <div id="vpad-left-zone"></div>
+  <div id="vpad-right-zone"></div>
+  <div id="vjoy-base"></div>
+  <div id="vjoy-thumb"></div>
+  <div id="vpad-tap-hint">TAP<br>ATK<br>2x PWR</div>
+</div>
+
+<script>
+(function(){
+  if(!window.IS_MOBILE) return;
+
+  const overlay   = document.getElementById('vpad-overlay');
+  const leftZone  = document.getElementById('vpad-left-zone');
+  const rightZone = document.getElementById('vpad-right-zone');
+  const joyBase   = document.getElementById('vjoy-base');
+  const joyThumb  = document.getElementById('vjoy-thumb');
+
+  overlay.style.display = 'block';
+
+  // ── Auto-hide after 3s idle, reappear on any touch ─────────────────────────
+  let hideTimer = null;
+  function showOverlay(){
+    overlay.style.opacity = '1';
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(()=>{ overlay.style.opacity = '0.15'; }, 3000);
+  }
+  showOverlay();
+  document.addEventListener('touchstart', showOverlay, {passive:true});
+
+  // ── Joystick state ──────────────────────────────────────────────────────────
+  const DEAD_ZONE  = 12;   // px — ignore tiny wiggles
+  const MAX_RADIUS = 48;   // px — max thumb travel from base
+  let joyTouchId   = null;
+  let joyOriginX   = 0;
+  let joyOriginY   = 0;
+
+  function updateJoy(cx, cy){
+    let dx = cx - joyOriginX;
+    let dy = cy - joyOriginY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+
+    // Clamp thumb to max radius
+    if(dist > MAX_RADIUS){
+      dx = dx / dist * MAX_RADIUS;
+      dy = dy / dist * MAX_RADIUS;
+    }
+
+    // Position thumb
+    joyThumb.style.left = (joyOriginX + dx) + 'px';
+    joyThumb.style.top  = (joyOriginY + dy) + 'px';
+
+    // Set VPAD directions
+    window.VPAD.left  = dx < -DEAD_ZONE;
+    window.VPAD.right = dx >  DEAD_ZONE;
+    window.VPAD.up    = dy < -DEAD_ZONE;
+    window.VPAD.down  = dy >  DEAD_ZONE;
+  }
+
+  function startJoy(x, y){
+    joyOriginX = x;
+    joyOriginY = y;
+    joyBase.style.left  = x + 'px';
+    joyBase.style.top   = y + 'px';
+    joyThumb.style.left = x + 'px';
+    joyThumb.style.top  = y + 'px';
+    joyBase.style.display  = 'block';
+    joyThumb.style.display = 'block';
+  }
+
+  function stopJoy(){
+    joyTouchId = null;
+    joyBase.style.display  = 'none';
+    joyThumb.style.display = 'none';
+    window.VPAD.left  = false;
+    window.VPAD.right = false;
+    window.VPAD.up    = false;
+    window.VPAD.down  = false;
+  }
+
+  leftZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    if(joyTouchId === null){
+      joyTouchId = t.identifier;
+      startJoy(t.clientX, t.clientY);
+    }
+  }, {passive:false});
+
+  leftZone.addEventListener('touchmove', e => {
+    e.preventDefault();
+    Array.from(e.changedTouches).forEach(t => {
+      if(t.identifier === joyTouchId) updateJoy(t.clientX, t.clientY);
+    });
+  }, {passive:false});
+
+  leftZone.addEventListener('touchend', e => {
+    e.preventDefault();
+    Array.from(e.changedTouches).forEach(t => {
+      if(t.identifier === joyTouchId) stopJoy();
+    });
+  }, {passive:false});
+
+  leftZone.addEventListener('touchcancel', e => {
+    e.preventDefault();
+    stopJoy();
+  }, {passive:false});
+
+  // ── Right zone — tap = attack, double-tap = power ───────────────────────────
+  let lastTapTime  = 0;
+  const DOUBLE_TAP = 300;  // ms window for double-tap
+
+  function pulse(key){
+    window.VPAD[key] = true;
+    requestAnimationFrame(()=>{ window.VPAD[key] = false; });
+  }
+
+  function spawnRipple(x, y, color){
+    const r = document.createElement('div');
+    r.className = 'tap-ripple';
+    r.style.left = x + 'px';
+    r.style.top  = y + 'px';
+    r.style.background = color || 'rgba(255,255,255,0.25)';
+    document.body.appendChild(r);
+    setTimeout(()=> r.remove(), 450);
+  }
+
+  rightZone.addEventListener('touchstart', e => {
+    e.preventDefault();
+    const t = e.changedTouches[0];
+    const now = Date.now();
+    const dt  = now - lastTapTime;
+    lastTapTime = now;
+
+    if(dt < DOUBLE_TAP){
+      // Double-tap → POWER
+      pulse('power');
+      spawnRipple(t.clientX, t.clientY, 'rgba(255,200,0,0.45)');
+      lastTapTime = 0; // reset so triple-tap doesn't chain
+    } else {
+      // Single tap → ATTACK
+      pulse('attack');
+      spawnRipple(t.clientX, t.clientY, 'rgba(100,180,255,0.45)');
+    }
+  }, {passive:false});
+
+  // Prevent scroll/zoom
+  document.addEventListener('touchmove',    e => e.preventDefault(), {passive:false});
+  document.addEventListener('gesturestart', e => e.preventDefault());
+})();
+</script>
+</body>
+
+</html>
