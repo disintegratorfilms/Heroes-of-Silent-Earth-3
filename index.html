@@ -1443,7 +1443,7 @@ class GameScene extends Phaser.Scene {
       this.hero.setTexture('hero_attack').play('hero-attack');
       this.time.delayedCall(420,()=>{
         if(this.gameOver||this.cutsceneActive) return;
-        const fb=this.add.sprite(this.hero.x+this.heroFacing*40,this.hero.y,'fireball').setScale(2).setDepth(120);
+        const fb=this.add.sprite(this.hero.x+this.heroFacing*40,this.hero.y,'fireball').setScale(2).setDepth(120).setFlipX(this.heroFacing<0);
         fb.play('fireball-fly'); fb.vx=this.heroFacing*700; fb.startX=fb.x; fb.maxRange=1200;
         this.fireballs.add(fb);
       });
