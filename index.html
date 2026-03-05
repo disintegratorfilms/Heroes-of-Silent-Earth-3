@@ -371,21 +371,21 @@ class GameScene extends Phaser.Scene {
     }
 
     /* ── UI ── */
-    this.add.text(20,14,'CHASE',{fontFamily:'Arial',fontSize:'32px',color:'#ffffff'}).setScrollFactor(0).setDepth(1000);
-    this.add.text(20,52,'HP',{fontFamily:'Arial',fontSize:'14px',color:'#88ff88'}).setScrollFactor(0).setDepth(1000);
+    this.add.text(16,12,'CHASE',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'38px',fontStyle:'bold',color:'#ffffff',stroke:'#000000',strokeThickness:4}).setScrollFactor(0).setDepth(1000);
+    this.add.text(16,60,'HP',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'20px',fontStyle:'bold',color:'#88ff88',stroke:'#000000',strokeThickness:3}).setScrollFactor(0).setDepth(1000);
     this.heroHealthBars=[];
     for(let i=0;i<10;i++) this.heroHealthBars.push(
-      this.add.rectangle(56+i*30,59,26,14,0x00dd00).setScrollFactor(0).setDepth(1000)
+      this.add.rectangle(70+i*36,70,30,18,0x00dd00).setScrollFactor(0).setDepth(1000)
     );
-    this.add.text(20,80,'PWR',{fontFamily:'Arial',fontSize:'14px',color:'#88bbff'}).setScrollFactor(0).setDepth(1000);
+    this.add.text(16,100,'PWR',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'20px',fontStyle:'bold',color:'#88bbff',stroke:'#000000',strokeThickness:3}).setScrollFactor(0).setDepth(1000);
     this.heroPowerBars=[];
     for(let i=0;i<10;i++) this.heroPowerBars.push(
-      this.add.rectangle(56+i*22,87,18,10,0x00aaff).setScrollFactor(0).setDepth(1000).setAlpha(0.2)
+      this.add.rectangle(70+i*28,110,24,14,0x00aaff).setScrollFactor(0).setDepth(1000).setAlpha(0.2)
     );
-    this.powerHint=this.add.text(20,104,'',{fontFamily:'Arial',fontSize:'12px',color:'#335577'}).setScrollFactor(0).setDepth(1000);
-    if(this.level===2) this.add.text(20,125,'LEVEL 2 — SUMMON THE PRISE',{fontFamily:'Arial',fontSize:'12px',color:'#ff44aa'}).setScrollFactor(0).setDepth(1000);
+    this.powerHint=this.add.text(16,136,'',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'16px',fontStyle:'bold',color:'#4488bb',stroke:'#000000',strokeThickness:2}).setScrollFactor(0).setDepth(1000);
+    if(this.level===2) this.add.text(16,166,'LEVEL 2 — SUMMON THE PRISE',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'16px',fontStyle:'bold',color:'#ff44aa',stroke:'#000000',strokeThickness:2}).setScrollFactor(0).setDepth(1000);
 
-    this.waveText=this.add.text(width-20,14,'',{fontFamily:'Arial',fontSize:'22px',color:'#ffdd44',align:'right'}).setOrigin(1,0).setScrollFactor(0).setDepth(1000);
+    this.waveText=this.add.text(width/2,14,'',{fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'34px',fontStyle:'bold',color:'#ffdd44',stroke:'#000000',strokeThickness:5,align:'center'}).setOrigin(0.5,0).setScrollFactor(0).setDepth(1000);
     this.countdownText=this.add.text(width/2,height*0.18,'',{
       fontFamily:'Arial Black',fontSize:'110px',color:'#ffffff',stroke:'#000000',strokeThickness:10
     }).setOrigin(0.5).setScrollFactor(0).setDepth(1500).setAlpha(0);
@@ -487,16 +487,16 @@ class GameScene extends Phaser.Scene {
   }
 
   createScoreDisplay(){
-    const {width}=this.scale;
-    this._scoreLabel=this.add.text(width-28,16,'0000000',{
+    const {width,height}=this.scale;
+    this._scoreLabel=this.add.text(width-20,height-20,'0000000',{
       fontFamily:'"Arial Black",Arial,sans-serif',
-      fontSize:'52px',
+      fontSize:'38px',
       color:'#ffee00',
-      stroke:'#ffffff',
-      strokeThickness:6,
+      stroke:'#000000',
+      strokeThickness:5,
       align:'right',
-      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:18,fill:true}
-    }).setOrigin(1,0).setScrollFactor(0).setDepth(5000);
+      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:14,fill:true}
+    }).setOrigin(1,1).setScrollFactor(0).setDepth(5000);
     this._scoreSwelling = false;
     this._updateScoreDisplay();
   }
@@ -1462,7 +1462,7 @@ class GameScene extends Phaser.Scene {
     const hitsLeft=Math.ceil((this.heroPowerMax-this.heroPower)/2);
     const blastLabel=this.level===2?'[G] SUMMON THE PRISE':'[G] POWER BLAST';
     if(this.heroPower>=this.heroPowerMax) this.powerHint.setText(blastLabel+' — READY!').setColor('#00ccff');
-    else this.powerHint.setText(`${blastLabel} — ${hitsLeft} hit${hitsLeft!==1?'s':''} to charge`).setColor('#335577');
+    else this.powerHint.setText(`${blastLabel} — ${hitsLeft} hit${hitsLeft!==1?'s':''} to charge`).setColor('#4488bb');
 
     /* ── Chase fireballs ── */
     if(!this._dialoguePause) this.fireballs.children.each(fb=>{
