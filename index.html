@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <style>
   html, body { margin:0; padding:0; background:#000; overflow:hidden; touch-action:none; }
-  canvas { display:block; }
+  canvas { display:block; position:relative; z-index:1; }
 </style>
 <title>Defend Silent Earth 3</title>
 <script src="https://cdn.jsdelivr.net/npm/phaser@3.70.0/dist/phaser.js"></script>
@@ -1878,6 +1878,7 @@ class Street3Scene extends Phaser.Scene {
 new Phaser.Game({
   type:Phaser.AUTO, width:1920, height:1080, pixelArt:true,
   scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
+  input:{ touch:{ capture: !window.IS_MOBILE } },
   scene:[TitleScene,ClaudioScene,CloseupScene,Street3Scene,GameScene]
 });
 </script>
@@ -1891,7 +1892,7 @@ new Phaser.Game({
   position: fixed;
   inset: 0;
   pointer-events: none;
-  z-index: 9999;
+  z-index: 99999;
   user-select: none;
   -webkit-user-select: none;
   transition: opacity 0.6s ease;
