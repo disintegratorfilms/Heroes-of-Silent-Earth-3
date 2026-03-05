@@ -25,6 +25,122 @@ window.IS_MOBILE = /Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent)
 // Virtual pad — any scene reads VPAD instead of raw cursors on mobile
 window.VPAD = { left:false, right:false, up:false, down:false, attack:false, power:false };
 
+// ── Phaser-native mobile controls ────────────────────────────────────────────
+// Call initMobileControls(scene) in each scene's create() on mobile.
+// Draws joystick + tap zones directly on the Phaser canvas using Phaser pointers.
+window.initMobileControls = function(scene) {
+  if(!window.IS_MOBILE) return;
+
+  const W = scene.scale.width;
+  const H = scene.scale.height;
+  const DEAD   = 15;
+  const RADIUS = 55;
+  const MID_X  = W * 0.5;
+
+  // Graphics for joystick visual
+  const gfx = scene.add.graphics().setDepth(9999).setScrollFactor(0);
+
+  let joyActive  = false;
+  let joyPtr     = null;
+  let joyOX = 0, joyOY = 0;
+  let lastTap    = 0;
+  const DOUBLE_TAP = 300;
+
+  // Auto-fade
+  let fadeTimer = null;
+  let alpha = 1;
+  function resetFade(){
+    alpha = 1;
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(()=>{ alpha = 0.15; }, 3000);
+  }
+  resetFade();
+
+  function drawJoy(){
+    gfx.clear();
+    gfx.setAlpha(alpha);
+
+    // Hint ring — right side
+    gfx.lineStyle(2, 0xffffff, 0.15);
+    gfx.strokeCircle(W * 0.82, H * 0.82, 44);
+    gfx.fillStyle(0xffffff, 0.06);
+    gfx.fillCircle(W * 0.82, H * 0.82, 44);
+
+    if(!joyActive) return;
+
+    // Joystick base
+    gfx.lineStyle(2, 0xffffff, 0.35);
+    gfx.strokeCircle(joyOX, joyOY, RADIUS);
+    gfx.fillStyle(0xffffff, 0.08);
+    gfx.fillCircle(joyOX, joyOY, RADIUS);
+
+    // Thumb
+    const dx = window.VPAD.left ? -RADIUS*0.6 : window.VPAD.right ? RADIUS*0.6 : 0;
+    const dy = window.VPAD.up   ? -RADIUS*0.6 : window.VPAD.down  ? RADIUS*0.6 : 0;
+    gfx.fillStyle(0xffffff, 0.45);
+    gfx.fillCircle(joyOX + dx, joyOY + dy, 22);
+  }
+
+  scene.input.on('pointerdown', function(ptr){
+    resetFade();
+    if(ptr.x < MID_X){
+      // LEFT ZONE — joystick
+      if(!joyActive){
+        joyActive = true;
+        joyPtr    = ptr.id;
+        joyOX     = ptr.x;
+        joyOY     = ptr.y;
+      }
+    } else {
+      // RIGHT ZONE — tap or double-tap
+      const now = Date.now();
+      if(now - lastTap < DOUBLE_TAP){
+        // Double tap = power
+        window.VPAD.power = true;
+        requestAnimationFrame(()=>{ window.VPAD.power = false; });
+        lastTap = 0;
+      } else {
+        // Single tap = attack
+        window.VPAD.attack = true;
+        requestAnimationFrame(()=>{ window.VPAD.attack = false; });
+        lastTap = now;
+      }
+    }
+  });
+
+  scene.input.on('pointermove', function(ptr){
+    if(!joyActive || ptr.id !== joyPtr) return;
+    resetFade();
+    const dx = ptr.x - joyOX;
+    const dy = ptr.y - joyOY;
+    window.VPAD.left  = dx < -DEAD;
+    window.VPAD.right = dx >  DEAD;
+    window.VPAD.up    = dy < -DEAD;
+    window.VPAD.down  = dy >  DEAD;
+  });
+
+  scene.input.on('pointerup', function(ptr){
+    if(ptr.id === joyPtr){
+      joyActive = false;
+      joyPtr    = null;
+      window.VPAD.left  = false;
+      window.VPAD.right = false;
+      window.VPAD.up    = false;
+      window.VPAD.down  = false;
+    }
+  });
+
+  // Draw every frame
+  scene.events.on('update', drawJoy);
+
+  // Clean up on scene shutdown
+  scene.events.once('shutdown', ()=>{
+    window.VPAD.left=window.VPAD.right=window.VPAD.up=window.VPAD.down=false;
+    clearTimeout(fadeTimer);
+    gfx.destroy();
+  });
+};
+
 /* =====================================================================
    TITLE SCENE
 ===================================================================== */
@@ -234,6 +350,7 @@ class GameScene extends Phaser.Scene {
     this.attackKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
     this.powerKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
     this.speed=320; this.SEPARATION_RADIUS=70;
+    window.initMobileControls(this);
   }
 
   /* ── One-way push: only companion B yields to A ── */
@@ -1504,6 +1621,7 @@ class ClaudioScene extends Phaser.Scene {
 
     this.walkSpeed = 300;
     this._transitioning = false;
+    window.initMobileControls(this);
     this._rightEdge = bgW - 80;
     this._playerControl = false;
 
@@ -1878,246 +1996,11 @@ class Street3Scene extends Phaser.Scene {
 new Phaser.Game({
   type:Phaser.AUTO, width:1920, height:1080, pixelArt:true,
   scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
-  input:{ touch:{ capture: !window.IS_MOBILE } },
   scene:[TitleScene,ClaudioScene,CloseupScene,Street3Scene,GameScene]
 });
 </script>
 
 
-<!-- ── MOBILE TOUCH CONTROLS ─────────────────────────────────────────────── -->
-<style>
-/* Joystick zone indicators — purely visual, low opacity */
-#vpad-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 99999;
-  user-select: none;
-  -webkit-user-select: none;
-  transition: opacity 0.6s ease;
-}
-/* Left half touch zone (invisible, pointer-events on) */
-#vpad-left-zone {
-  position: absolute;
-  left: 0; top: 0;
-  width: 50%; height: 100%;
-  pointer-events: all;
-  touch-action: none;
-}
-/* Right half touch zone */
-#vpad-right-zone {
-  position: absolute;
-  right: 0; top: 0;
-  width: 50%; height: 100%;
-  pointer-events: all;
-  touch-action: none;
-}
-/* Joystick base — appears where thumb lands */
-#vjoy-base {
-  position: absolute;
-  width: 100px; height: 100px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.08);
-  border: 2px solid rgba(255,255,255,0.25);
-  pointer-events: none;
-  display: none;
-  transform: translate(-50%, -50%);
-}
-/* Joystick thumb */
-#vjoy-thumb {
-  position: absolute;
-  width: 44px; height: 44px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.30);
-  border: 2px solid rgba(255,255,255,0.55);
-  pointer-events: none;
-  display: none;
-  transform: translate(-50%, -50%);
-}
-/* Right zone hint — tiny tap ripple indicator */
-#vpad-tap-hint {
-  position: absolute;
-  right: 60px; bottom: 80px;
-  width: 64px; height: 64px;
-  border-radius: 50%;
-  border: 2px solid rgba(255,255,255,0.15);
-  pointer-events: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  color: rgba(255,255,255,0.20);
-  font-family: Arial, sans-serif;
-  text-align: center;
-  line-height: 1.3;
-}
-/* Ripple on tap */
-.tap-ripple {
-  position: absolute;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.25);
-  animation: ripple 0.4s ease-out forwards;
-  pointer-events: none;
-  transform: translate(-50%, -50%);
-}
-@keyframes ripple {
-  from { width: 20px; height: 20px; opacity: 0.7; }
-  to   { width: 100px; height: 100px; opacity: 0; }
-}
-</style>
-
-<div id="vpad-overlay">
-  <div id="vpad-left-zone"></div>
-  <div id="vpad-right-zone"></div>
-  <div id="vjoy-base"></div>
-  <div id="vjoy-thumb"></div>
-  <div id="vpad-tap-hint">TAP<br>ATK<br>2x PWR</div>
-</div>
-
-<script>
-(function(){
-  if(!window.IS_MOBILE) return;
-
-  const overlay   = document.getElementById('vpad-overlay');
-  const leftZone  = document.getElementById('vpad-left-zone');
-  const rightZone = document.getElementById('vpad-right-zone');
-  const joyBase   = document.getElementById('vjoy-base');
-  const joyThumb  = document.getElementById('vjoy-thumb');
-
-  overlay.style.display = 'block';
-
-  // ── Auto-hide after 3s idle, reappear on any touch ─────────────────────────
-  let hideTimer = null;
-  function showOverlay(){
-    overlay.style.opacity = '1';
-    clearTimeout(hideTimer);
-    hideTimer = setTimeout(()=>{ overlay.style.opacity = '0.15'; }, 3000);
-  }
-  showOverlay();
-  document.addEventListener('touchstart', showOverlay, {passive:true});
-
-  // ── Joystick state ──────────────────────────────────────────────────────────
-  const DEAD_ZONE  = 12;   // px — ignore tiny wiggles
-  const MAX_RADIUS = 48;   // px — max thumb travel from base
-  let joyTouchId   = null;
-  let joyOriginX   = 0;
-  let joyOriginY   = 0;
-
-  function updateJoy(cx, cy){
-    let dx = cx - joyOriginX;
-    let dy = cy - joyOriginY;
-    const dist = Math.sqrt(dx*dx + dy*dy);
-
-    // Clamp thumb to max radius
-    if(dist > MAX_RADIUS){
-      dx = dx / dist * MAX_RADIUS;
-      dy = dy / dist * MAX_RADIUS;
-    }
-
-    // Position thumb
-    joyThumb.style.left = (joyOriginX + dx) + 'px';
-    joyThumb.style.top  = (joyOriginY + dy) + 'px';
-
-    // Set VPAD directions
-    window.VPAD.left  = dx < -DEAD_ZONE;
-    window.VPAD.right = dx >  DEAD_ZONE;
-    window.VPAD.up    = dy < -DEAD_ZONE;
-    window.VPAD.down  = dy >  DEAD_ZONE;
-  }
-
-  function startJoy(x, y){
-    joyOriginX = x;
-    joyOriginY = y;
-    joyBase.style.left  = x + 'px';
-    joyBase.style.top   = y + 'px';
-    joyThumb.style.left = x + 'px';
-    joyThumb.style.top  = y + 'px';
-    joyBase.style.display  = 'block';
-    joyThumb.style.display = 'block';
-  }
-
-  function stopJoy(){
-    joyTouchId = null;
-    joyBase.style.display  = 'none';
-    joyThumb.style.display = 'none';
-    window.VPAD.left  = false;
-    window.VPAD.right = false;
-    window.VPAD.up    = false;
-    window.VPAD.down  = false;
-  }
-
-  leftZone.addEventListener('touchstart', e => {
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    if(joyTouchId === null){
-      joyTouchId = t.identifier;
-      startJoy(t.clientX, t.clientY);
-    }
-  }, {passive:false});
-
-  leftZone.addEventListener('touchmove', e => {
-    e.preventDefault();
-    Array.from(e.changedTouches).forEach(t => {
-      if(t.identifier === joyTouchId) updateJoy(t.clientX, t.clientY);
-    });
-  }, {passive:false});
-
-  leftZone.addEventListener('touchend', e => {
-    e.preventDefault();
-    Array.from(e.changedTouches).forEach(t => {
-      if(t.identifier === joyTouchId) stopJoy();
-    });
-  }, {passive:false});
-
-  leftZone.addEventListener('touchcancel', e => {
-    e.preventDefault();
-    stopJoy();
-  }, {passive:false});
-
-  // ── Right zone — tap = attack, double-tap = power ───────────────────────────
-  let lastTapTime  = 0;
-  const DOUBLE_TAP = 300;  // ms window for double-tap
-
-  function pulse(key){
-    window.VPAD[key] = true;
-    requestAnimationFrame(()=>{ window.VPAD[key] = false; });
-  }
-
-  function spawnRipple(x, y, color){
-    const r = document.createElement('div');
-    r.className = 'tap-ripple';
-    r.style.left = x + 'px';
-    r.style.top  = y + 'px';
-    r.style.background = color || 'rgba(255,255,255,0.25)';
-    document.body.appendChild(r);
-    setTimeout(()=> r.remove(), 450);
-  }
-
-  rightZone.addEventListener('touchstart', e => {
-    e.preventDefault();
-    const t = e.changedTouches[0];
-    const now = Date.now();
-    const dt  = now - lastTapTime;
-    lastTapTime = now;
-
-    if(dt < DOUBLE_TAP){
-      // Double-tap → POWER
-      pulse('power');
-      spawnRipple(t.clientX, t.clientY, 'rgba(255,200,0,0.45)');
-      lastTapTime = 0; // reset so triple-tap doesn't chain
-    } else {
-      // Single tap → ATTACK
-      pulse('attack');
-      spawnRipple(t.clientX, t.clientY, 'rgba(100,180,255,0.45)');
-    }
-  }, {passive:false});
-
-  // Prevent scroll/zoom
-  document.addEventListener('touchmove',    e => e.preventDefault(), {passive:false});
-  document.addEventListener('gesturestart', e => e.preventDefault());
-})();
-</script>
 </body>
 
 </html>
