@@ -49,8 +49,8 @@ window.showSkipButton = function(scene) {
   // Use inline style properties individually for maximum compatibility
   const s = el.style;
   s.position         = 'fixed';
-  s.top              = '14px';
-  s.right            = '14px';
+  s.bottom           = '28px';
+  s.right            = '44px';
   s.zIndex           = '999999';
   s.fontFamily       = '"Arial Black", Arial, sans-serif';
   s.fontSize         = '24px';
@@ -2055,15 +2055,23 @@ class Street3Scene extends Phaser.Scene {
     // Very slow zoom in over 6 seconds
     this.cameras.main.zoomTo(1.18, 6000, 'Linear', false);
 
-    // After 6s: growl graphic
-    this.time.delayedCall(6000,()=>this._doGrowl());
+    // Show skip button — it will be hidden before the growl fires
     window.showSkipButton(this);
     window._skipAction = ()=>{ this._doGrowl(); };
+
+    // After 6s: growl graphic
+    this._growlTimer=this.time.delayedCall(6000,()=>this._doGrowl());
   }
 
   _doGrowl(){
+    if(this._growlDone) return;   // guard against double-fire
+    this._growlDone=true;
+    if(this._growlTimer){ this._growlTimer.remove(false); this._growlTimer=null; }
+    // Remove skip button before the growl — no skipping from here
+    window.hideSkipButton();
+    window._skipAction = null;
+
     const {width,height}=this.scale;
-    window._skipAction = ()=>{ this._switchToNotHappy(); };
     // Rumble camera
     this.cameras.main.shake(400,0.006);
 
@@ -2088,8 +2096,9 @@ class Street3Scene extends Phaser.Scene {
   }
 
   _switchToNotHappy(){
+    if(this._notHappyDone) return;   // guard
+    this._notHappyDone=true;
     const {width,height}=this.scale;
-    window._skipAction = ()=>{ this._apolloEnters(); };
     const groundY=height*0.78;
     const claudioX=width*0.32;
 
@@ -2106,6 +2115,8 @@ class Street3Scene extends Phaser.Scene {
   }
 
   _apolloEnters(){
+    if(this._apolloDone) return;   // guard — prevents multiple Apollos on spam
+    this._apolloDone=true;
     const {width,height}=this.scale;
     // Claudio is at width*0.32, Apollo stops just to his right, faces left = toward Claudio
     const groundY=height*0.80;
