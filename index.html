@@ -286,6 +286,7 @@ class GameScene extends Phaser.Scene {
     this.worldWidth       = width*5;
     this.gameOver         = false;
     this.cutsceneActive   = false;
+    if(typeof gtag!=='undefined') gtag('event','game_started',{level:this.level||1});
     this.allWavesCleared  = false;
     this.waveCountdownActive = false;
 
@@ -898,6 +899,7 @@ class GameScene extends Phaser.Scene {
   triggerGameOver(){
     if(this.gameOver) return;
     this.gameOver=true; this.cameras.main.shake(700,0.025);
+    if(typeof gtag!=='undefined') gtag('event','game_over',{level:this.level||1,score:window.SCORE||0});
     const {width,height}=this.scale;
     this.add.rectangle(width/2,height/2,width,height,0x000000,0.72).setScrollFactor(0).setDepth(2000);
     this.add.text(width/2,height/2-70,'GAME OVER',{fontFamily:'Arial Black',fontSize:'96px',color:'#ff2222',stroke:'#000000',strokeThickness:8}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
@@ -1433,10 +1435,12 @@ class GameScene extends Phaser.Scene {
        &&this.wavesTriggered>=this.waveConfig.length
        &&this.enemies.filter(e=>e.active&&!e.dead).length===0){
       if(this.level===1){
+        if(typeof gtag!=='undefined') gtag('event','level_complete',{level:1,score:window.SCORE||0});
         this.triggerMayoCutscene();
       } else if(this.level===2&&!this.priseSpawning){
         // Level 2: only end after Prise spawn phase is also over and enemies cleared
         this.allWavesCleared=true;
+        if(typeof gtag!=='undefined') gtag('event','level_complete',{level:2,score:window.SCORE||0});
         this.triggerLevel2Complete();
       }
     }
