@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <!-- Google tag (gtag.js) -->
 <script async src="https://www.googletagmanager.com/gtag/js?id=G-ZGVJJV9B89"></script>
 <script>
@@ -9,8 +11,6 @@
   gtag('js', new Date());
   gtag('config', 'G-ZGVJJV9B89');
 </script>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-title" content="Silent Earth 3" />
@@ -39,6 +39,14 @@ canvas{ display:block; image-rendering:pixelated; }
 /* ── Mobile detection & virtual pad state ───────────────────────────────── */
 window.IS_MOBILE = /Android|iPhone|iPad|iPod|Touch/i.test(navigator.userAgent)
   || (navigator.maxTouchPoints > 1);
+
+// Ensure the Phaser canvas can receive keyboard focus on desktop
+window.addEventListener('load', ()=>{
+  setTimeout(()=>{
+    const c = document.querySelector('canvas');
+    if(c){ c.setAttribute('tabindex','0'); c.focus(); }
+  }, 500);
+});
 
 // Virtual pad — any scene reads VPAD instead of raw cursors on mobile
 window.VPAD  = { left:false, right:false, up:false, down:false, attack:false, power:false };
@@ -102,7 +110,59 @@ window.hideSkipButton = function() {
   window._skipAction = null;
 };
 
-// ── Phaser-native mobile controls ────────────────────────────────────────────
+// ── Next button — shown during post-boss dialogue so players read at own pace ──
+window._nextEl = null;
+window._nextAction = null;
+window.showNextButton = function(scene, onNext) {
+  window.hideNextButton();
+  const el = document.createElement('div');
+  el.id = 'game-next-btn';
+  el.textContent = 'NEXT  ›';
+  const s = el.style;
+  s.position         = 'fixed';
+  s.bottom           = '28px';
+  s.right            = '44px';
+  s.zIndex           = '999999';
+  s.fontFamily       = '"Arial Black", Arial, sans-serif';
+  s.fontSize         = '24px';
+  s.fontWeight       = '900';
+  s.color            = '#ffffff';
+  s.textShadow       = '0 0 8px #ffcc44, 0 0 18px #ff8800, 0 0 2px #000';
+  s.background       = 'linear-gradient(180deg,#cc6600 0%,#994400 100%)';
+  s.border           = '2px solid #ffcc88';
+  s.borderRadius     = '10px';
+  s.padding          = '12px 26px';
+  s.cursor           = 'pointer';
+  s.boxShadow        = '0 0 14px #ff880099, inset 0 1px 0 #ffcc4444';
+  s.letterSpacing    = '1px';
+  s.userSelect       = 'none';
+  s.webkitUserSelect = 'none';
+  s.touchAction      = 'manipulation';
+  s.webkitTapHighlightColor = 'transparent';
+  s.minWidth         = '80px';
+  s.textAlign        = 'center';
+  s.lineHeight       = '1.2';
+  el.addEventListener('touchstart', (e)=>{ e.stopPropagation(); }, {passive:false});
+  el.addEventListener('touchend', (e)=>{
+    e.preventDefault(); e.stopPropagation();
+    if(window._nextAction) window._nextAction();
+  }, {passive:false});
+  el.addEventListener('click', ()=>{ if(window._nextAction) window._nextAction(); });
+  el.addEventListener('mouseover', ()=>{ s.background='linear-gradient(180deg,#dd7700 0%,#aa5500 100%)'; });
+  el.addEventListener('mouseout',  ()=>{ s.background='linear-gradient(180deg,#cc6600 0%,#994400 100%)'; });
+  window._nextAction = onNext;
+  document.body.appendChild(el);
+  window._nextEl = el;
+  if(scene) scene.events.once('shutdown', ()=>{ window.hideNextButton(); });
+};
+window.hideNextButton = function() {
+  if(window._nextEl && window._nextEl.parentNode)
+    window._nextEl.parentNode.removeChild(window._nextEl);
+  window._nextEl = null;
+  window._nextAction = null;
+};
+
+
 window.VPAD_QUEUE = [];   // event queue: 'attack' | 'power' — drained one per update
 
 window.initMobileControls = function(scene) {
@@ -113,7 +173,8 @@ window.initMobileControls = function(scene) {
   const DEAD   = 15;
   const RADIUS = 60;
   const MID_X  = W * 0.5;
-  const LONG_MS = 2000;   // 2 seconds hold = power
+  const LONG_MS       = 2000;  // 2 seconds hold = power
+  const TWO_PUNCH_MS  = 300;   // 300 ms hold = two_punch
 
   const gfx = scene.add.graphics().setDepth(9999).setScrollFactor(0);
 
@@ -121,10 +182,11 @@ window.initMobileControls = function(scene) {
   let joyActive = false, joyPtr = null, joyOX = 0, joyOY = 0;
 
   // ── Attack button state ──
-  let atkPtr      = null;
-  let atkDownAt   = 0;
-  let pwrFired    = false;
-  let pwrCharging = false;
+  let atkPtr        = null;
+  let atkDownAt     = 0;
+  let pwrFired      = false;
+  let twoPunchFired = false;
+  let pwrCharging   = false;
 
   // ── Auto-fade ──
   let fadeTimer = null, alpha = 1;
@@ -162,10 +224,15 @@ window.initMobileControls = function(scene) {
     if(atkPtr === null){ pwrCharging = false; return; }
     const held = scene.time.now - atkDownAt;
     if(!pwrFired && held >= LONG_MS){
-      pwrFired    = true;
-      pwrCharging = false;
+      pwrFired      = true;
+      twoPunchFired = true;
+      pwrCharging   = false;
       window.VPAD_QUEUE.push('power');
-    } else if(!pwrFired && held > 300){
+    } else if(!twoPunchFired && held >= TWO_PUNCH_MS){
+      twoPunchFired = true;
+      pwrCharging   = true;
+      window.VPAD_QUEUE.push('two_punch');
+    } else if(!pwrFired && held > TWO_PUNCH_MS){
       pwrCharging = true;
     }
   }
@@ -179,12 +246,12 @@ window.initMobileControls = function(scene) {
       }
     } else {
       if(atkPtr === null){
-        atkPtr    = ptr.id;
-        atkDownAt = scene.time.now;
-        pwrFired  = false;
-        pwrCharging = false;
-        // Queue attack immediately on press — no cooldown, no rAF
-        window.VPAD_QUEUE.push('attack');
+        atkPtr        = ptr.id;
+        atkDownAt     = scene.time.now;
+        pwrFired      = false;
+        twoPunchFired = false;
+        pwrCharging   = false;
+        // attack fires on release (short tap); two_punch fires in onUpdate at TWO_PUNCH_MS
       }
     }
   });
@@ -205,6 +272,10 @@ window.initMobileControls = function(scene) {
       window.VPAD.left=window.VPAD.right=window.VPAD.up=window.VPAD.down=false;
     }
     if(ptr.id === atkPtr){
+      // Short tap: neither two_punch nor power fired yet → fire single attack
+      if(!twoPunchFired && !pwrFired){
+        window.VPAD_QUEUE.push('attack');
+      }
       atkPtr = null; pwrCharging = false;
     }
   });
@@ -238,12 +309,214 @@ class TitleScene extends Phaser.Scene {
       '8-bit arrangement: "In Keeping Secrets of Silent Earth: 3"\nby @johnnymfapplecore  youtube.com/@johnnymfapplecore',
       {fontFamily:'Arial',fontSize:'15px',color:'#aaaaaa',align:'right'}
     ).setOrigin(1,1).setDepth(100);
-    this.input.once('pointerdown',()=>{
-      this.cameras.main.fadeOut(700,0,0,0);
-      this.time.delayedCall(750,()=>{
-        this.scene.start('ClaudioScene',{music:this.music});
-      });
+    /* ── DEV level select (DOM — mobile friendly) ── */
+    let devOpen=false;
+    let devTransitioning=false;
+
+    // ── DOM dev button (top-left) ──
+    const devDom=document.createElement('div');
+    devDom.id='devMenuBtn';
+    devDom.textContent='DEV';
+    devDom.style.cssText=`
+      position:fixed; top:10px; left:10px; z-index:9500;
+      font-family:"Arial Black",Arial,sans-serif; font-size:18px; font-weight:900;
+      color:#666666; background:#111111; border:2px solid #333333;
+      padding:8px 14px; border-radius:4px; cursor:pointer;
+      user-select:none; -webkit-user-select:none;
+      touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+      display:none;
+    `;
+    document.body.appendChild(devDom);
+
+    let devUnlocked=false;
+    const _devKeyHandler=(e)=>{
+      if(e.key==='`'){
+        devUnlocked=!devUnlocked;
+        devDom.style.display=devUnlocked?'block':'none';
+        if(!devUnlocked){ devOpen=false; devPanelDom.style.display='none'; }
+      }
+    };
+    window.addEventListener('keydown',_devKeyHandler);
+
+    // ── DOM dev panel ──
+    const devPanelDom=document.createElement('div');
+    devPanelDom.id='devMenuPanel';
+    devPanelDom.style.cssText=`
+      position:fixed; top:58px; left:10px; z-index:9499;
+      display:none; flex-direction:column; gap:8px;
+      background:#111111ee; border:2px solid #444444;
+      border-radius:6px; padding:12px 14px;
+      min-width:260px;
+    `;
+    document.body.appendChild(devPanelDom);
+
+    const fade=(cb)=>{
+      devOpen=false; devTransitioning=true;
+      devPanelDom.style.display='none';
+      this.music.stop();
+      this.cameras.main.fadeOut(400,0,0,0);
+      this.time.delayedCall(420,cb);
+    };
+
+    const stages=[
+      { label:'1 · Beginning Cutscene',      cb:()=>fade(()=>this.scene.start('ClaudioScene',{music:this.music})) },
+      { label:'2 · Silent Earth Level 1',     cb:()=>fade(()=>this.scene.start('GameScene',{music:null,level:1})) },
+      { label:'3 · Silent Earth Level 2',     cb:()=>fade(()=>this.scene.start('GameScene',{music:null,level:2})) },
+      { label:'4 · Godder Dam Beat Em Up',    cb:()=>fade(()=>this.scene.start('GodderDamScene',{music:null})) },
+      { label:'5 · Boss Fight Godder Dam',    cb:()=>fade(()=>this.scene.start('BossFightScene')) },
+      { label:'5.5 · Closeup Cutscene',       cb:()=>fade(()=>{ window._bossCloseupDone=null; this.scene.start('BossCloseupScene'); }) },
+      { label:'6 · Cutscene Ambellina',       cb:()=>fade(()=>this.scene.start('Level4CutsceneScene')) },
+      { label:'7 · Ambellina vs The Priest',  cb:()=>fade(()=>this.scene.start('PriestFightScene')) },
+    ];
+
+    stages.forEach(({label,cb})=>{
+      const btn=document.createElement('div');
+      btn.textContent='▶  '+label;
+      btn.style.cssText=`
+        font-family:"Arial Black",Arial,sans-serif; font-size:17px; font-weight:900;
+        color:#dddddd; background:#222222; border:1px solid #444444;
+        padding:12px 16px; border-radius:4px; cursor:pointer;
+        user-select:none; -webkit-user-select:none;
+        touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+        white-space:nowrap;
+      `;
+      btn.addEventListener('pointerover',()=>{ btn.style.color='#ffffff'; btn.style.background='#333333'; });
+      btn.addEventListener('pointerout', ()=>{ btn.style.color='#dddddd'; btn.style.background='#222222'; });
+      btn.addEventListener('pointerdown',cb);
+      devPanelDom.appendChild(btn);
     });
+
+    devDom.addEventListener('pointerdown',(e)=>{
+      e.stopPropagation();
+      devOpen=!devOpen;
+      devPanelDom.style.display=devOpen?'flex':'none';
+    });
+
+    this.events.once('shutdown',()=>{
+      window.removeEventListener('keydown',_devKeyHandler);
+      document.getElementById('devMenuBtn')?.remove();
+      document.getElementById('devMenuPanel')?.remove();
+    });
+
+    // Title "click anywhere" — replaced by selection buttons below
+    // ── Mode selection buttons (DOM, mobile-safe) ──
+    const makeMenuBtn=(label,sublabel,glowColor,borderColor,cb)=>{
+      const wrap=document.createElement('div');
+      wrap.style.cssText=`
+        display:flex; flex-direction:column; align-items:center; justify-content:center;
+        width:clamp(110px,11vw,190px);
+        padding:9px 12px 10px;
+        background:linear-gradient(180deg,#0a0a14 0%,#050510 100%);
+        border:2px solid ${borderColor};
+        border-radius:6px;
+        cursor:pointer;
+        user-select:none; -webkit-user-select:none;
+        touch-action:manipulation;
+        -webkit-tap-highlight-color:transparent;
+        box-shadow:0 0 18px ${glowColor}66, inset 0 1px 0 ${borderColor}44;
+        transition:transform 0.08s, box-shadow 0.08s;
+        position:relative;
+        overflow:hidden;
+      `;
+      // Scanline overlay
+      const scan=document.createElement('div');
+      scan.style.cssText=`
+        position:absolute;top:0;left:0;width:100%;height:100%;
+        background:repeating-linear-gradient(0deg,transparent,transparent 3px,rgba(0,0,0,0.18) 3px,rgba(0,0,0,0.18) 4px);
+        pointer-events:none;
+      `;
+      wrap.appendChild(scan);
+      const lbl=document.createElement('div');
+      lbl.textContent=label;
+      lbl.style.cssText=`
+        font-family:"Arial Black",Arial,sans-serif;
+        font-size:clamp(8px,0.8vw,12px);
+        font-weight:900;
+        color:#ffffff;
+        text-shadow:0 0 10px ${glowColor}, 0 0 24px ${glowColor}88, 0 2px 0 #000;
+        letter-spacing:2px;
+        text-align:center;
+        line-height:1.2;
+        margin-bottom:8px;
+        position:relative;
+      `;
+      const sub=document.createElement('div');
+      sub.textContent=sublabel;
+      sub.style.cssText=`
+        font-family:"Arial Black",Arial,sans-serif;
+        font-size:clamp(6px,0.5vw,8px);
+        font-weight:700;
+        color:${glowColor};
+        letter-spacing:1px;
+        text-align:center;
+        text-shadow:0 0 8px ${glowColor};
+        position:relative;
+      `;
+      wrap.appendChild(lbl);
+      wrap.appendChild(sub);
+      const onDown=()=>{
+        wrap.style.transform='scale(0.96)';
+        wrap.style.boxShadow=`0 0 32px ${glowColor}99, inset 0 1px 0 ${borderColor}44`;
+      };
+      const onUp=()=>{
+        wrap.style.transform='scale(1)';
+        wrap.style.boxShadow=`0 0 18px ${glowColor}66, inset 0 1px 0 ${borderColor}44`;
+        cb();
+      };
+      wrap.addEventListener('mousedown', onDown);
+      wrap.addEventListener('mouseup',   onUp);
+      wrap.addEventListener('mouseover', ()=>{ wrap.style.boxShadow=`0 0 28px ${glowColor}aa, inset 0 1px 0 ${borderColor}44`; wrap.style.borderColor=glowColor; });
+      wrap.addEventListener('mouseout',  ()=>{ wrap.style.transform='scale(1)'; wrap.style.boxShadow=`0 0 18px ${glowColor}66, inset 0 1px 0 ${borderColor}44`; wrap.style.borderColor=borderColor; });
+      wrap.addEventListener('touchstart', (e)=>{ e.stopPropagation(); onDown(); }, {passive:false});
+      wrap.addEventListener('touchend',   (e)=>{ e.preventDefault(); e.stopPropagation(); onUp(); }, {passive:false});
+      return wrap;
+    };
+
+    const overlay=document.createElement('div');
+    overlay.id='titleMenuOverlay';
+    overlay.style.cssText=`
+      position:fixed; bottom:0; left:0; width:100%; z-index:9000;
+      display:flex; flex-direction:column; align-items:center;
+      padding-bottom:clamp(20px,4vh,56px);
+      pointer-events:none;
+    `;
+
+    // Title text above buttons
+    const titleDiv=document.createElement('div');
+    titleDiv.style.cssText=`
+      font-family:"Arial Black",Arial,sans-serif;
+      font-size:clamp(11px,1.1vw,16px);
+      color:#888888;
+      letter-spacing:3px;
+      text-transform:uppercase;
+      margin-bottom:16px;
+      text-shadow:0 0 6px #33336688;
+      pointer-events:none;
+    `;
+    titleDiv.textContent='SELECT MODE';
+    overlay.appendChild(titleDiv);
+
+    const btnRow=document.createElement('div');
+    btnRow.style.cssText='display:flex; gap:clamp(16px,2vw,32px); pointer-events:auto;';
+
+    const startFull=()=>{
+      document.getElementById('titleMenuOverlay')?.remove();
+      this.cameras.main.fadeOut(700,0,0,0);
+      this.time.delayedCall(750,()=>{ this.scene.start('ClaudioScene',{music:this.music}); });
+    };
+    const startGD=()=>{
+      document.getElementById('titleMenuOverlay')?.remove();
+      this.music.stop();
+      this.cameras.main.fadeOut(700,0,0,0);
+      this.time.delayedCall(750,()=>{ this.scene.start('GodderDamScene',{music:null}); });
+    };
+
+    btnRow.appendChild(makeMenuBtn('BATTLE OF','SILENT EARTH: 3','#44aaff','#2266bb', startFull));
+    btnRow.appendChild(makeMenuBtn('GODDER DAM','BEAT EM UP','#ff6622','#aa3300', startGD));
+    overlay.appendChild(btnRow);
+    document.body.appendChild(overlay);
+
+    this.events.once('shutdown',()=>{ document.getElementById('titleMenuOverlay')?.remove(); });
   }
 }
 
@@ -286,7 +559,6 @@ class GameScene extends Phaser.Scene {
     this.worldWidth       = width*5;
     this.gameOver         = false;
     this.cutsceneActive   = false;
-    if(typeof gtag!=='undefined') gtag('event','game_started',{level:this.level||1});
     this.allWavesCleared  = false;
     this.waveCountdownActive = false;
 
@@ -899,7 +1171,6 @@ class GameScene extends Phaser.Scene {
   triggerGameOver(){
     if(this.gameOver) return;
     this.gameOver=true; this.cameras.main.shake(700,0.025);
-    if(typeof gtag!=='undefined') gtag('event','game_over',{level:this.level||1,score:window.SCORE||0});
     const {width,height}=this.scale;
     this.add.rectangle(width/2,height/2,width,height,0x000000,0.72).setScrollFactor(0).setDepth(2000);
     this.add.text(width/2,height/2-70,'GAME OVER',{fontFamily:'Arial Black',fontSize:'96px',color:'#ff2222',stroke:'#000000',strokeThickness:8}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
@@ -1320,28 +1591,68 @@ class GameScene extends Phaser.Scene {
                   });
                 });
 
-                // ── Play Again after ascension completes ──
+                // ── Score screen + Transport to Godder Dam after ascension completes ──
                 this.time.delayedCall(4500,()=>{
                   if(this.music&&this.music.isPlaying) this.music.stop();
+                  const {width,height}=this.scale;
+
+                  // Dark overlay
+                  const overlay=this.add.rectangle(width/2,height/2,width,height,0x000000,0.82)
+                    .setScrollFactor(0).setDepth(3002).setAlpha(0);
+                  this.tweens.add({targets:overlay,alpha:1,duration:600});
+
                   // Final score
                   const scoreStr=String(window.SCORE).padStart(7,'0');
                   this.add.text(width/2,height/2-100,'FINAL SCORE',{
                     fontFamily:'Arial Black',fontSize:'34px',color:'#aaddff',
                     stroke:'#000000',strokeThickness:5
-                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3002).setAlpha(0.9);
+                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3003).setAlpha(0.9);
                   this.add.text(width/2,height/2-40,scoreStr,{
                     fontFamily:'Arial Black',fontSize:'80px',color:'#ffee00',
                     stroke:'#000000',strokeThickness:8
-                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3002);
-                  const playAgain=this.add.text(width/2,height/2+70,'— Play Again —',{
-                    fontFamily:'Arial Black',fontSize:'42px',color:'#ffffff',
-                    stroke:'#000000',strokeThickness:6
-                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3002).setAlpha(0)
-                    .setInteractive({useHandCursor:true});
-                  this.tweens.add({targets:playAgain,alpha:1,duration:800});
-                  playAgain.on('pointerover',()=>playAgain.setColor('#ffdd44'));
-                  playAgain.on('pointerout', ()=>playAgain.setColor('#ffffff'));
-                  playAgain.on('pointerdown',()=>{ window.SCORE=0; this.scene.start('TitleScene'); });
+                  }).setOrigin(0.5).setScrollFactor(0).setDepth(3003);
+
+                  // Transport button — DOM for reliable mobile touch
+                  const btn=document.createElement('button');
+                  btn.textContent='TRANSPORT TO GODDER DAM';
+                  btn.id='transportBtn';
+                  btn.style.cssText=[
+                    'position:fixed','top:62%','left:50%',
+                    'transform:translateX(-50%)',
+                    'background:#1a1a2e',
+                    'color:#00eeff',
+                    'font-family:Arial Black, sans-serif',
+                    'font-size:clamp(18px,3vw,42px)',
+                    'font-weight:900',
+                    'padding:22px 52px',
+                    'border:4px solid #00eeff',
+                    'border-radius:12px',
+                    'cursor:pointer',
+                    'pointer-events:auto',
+                    'touch-action:manipulation',
+                    '-webkit-tap-highlight-color:transparent',
+                    'text-shadow:0 0 16px #00eeff, 0 0 32px #00aabb',
+                    'box-shadow:0 0 24px #00eeff44, 0 6px 0 rgba(0,0,0,0.6)',
+                    'letter-spacing:3px',
+                    'z-index:9999',
+                    'opacity:0',
+                    'transition:opacity 0.7s ease'
+                  ].join(';');
+
+                  document.body.appendChild(btn);
+                  this.game.canvas.style.pointerEvents='none';
+                  requestAnimationFrame(()=>requestAnimationFrame(()=>{ btn.style.opacity='1'; }));
+
+                  btn.addEventListener('pointerdown',()=>{
+                    btn.remove();
+                    this.game.canvas.style.pointerEvents='';
+                    this.cameras.main.fadeOut(700,0,0,0);
+                    this.time.delayedCall(750,()=>{
+                      this.scene.start('GodderDamScene',{music:null});
+                    });
+                  },{passive:false});
+
+                  this.events.once('shutdown',()=>{ document.getElementById('transportBtn')?.remove(); this.game.canvas.style.pointerEvents=''; });
                 });
               });
             });
@@ -1435,12 +1746,10 @@ class GameScene extends Phaser.Scene {
        &&this.wavesTriggered>=this.waveConfig.length
        &&this.enemies.filter(e=>e.active&&!e.dead).length===0){
       if(this.level===1){
-        if(typeof gtag!=='undefined') gtag('event','level_complete',{level:1,score:window.SCORE||0});
         this.triggerMayoCutscene();
       } else if(this.level===2&&!this.priseSpawning){
         // Level 2: only end after Prise spawn phase is also over and enemies cleared
         this.allWavesCleared=true;
-        if(typeof gtag!=='undefined') gtag('event','level_complete',{level:2,score:window.SCORE||0});
         this.triggerLevel2Complete();
       }
     }
@@ -1671,6 +1980,7 @@ class GameScene extends Phaser.Scene {
         { fb.destroy(); return; }
       if(fb.active&&(fb.x<-200||fb.x>this.worldWidth+200)) fb.destroy();
     });
+
 
     /* ── Enemy AI ── */
     this.enemies=this.enemies.filter(e=>e.active);
@@ -2199,15 +2509,2969 @@ class Street3Scene extends Phaser.Scene {
 
 /* =====================================================================
    GODDER DAM SCENE  —  Level 3
-   Assets: assets/bg/godderdamconceptpieces.png  (1536x1024)
-           assets/claudio/claudio_walk.png
-           assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3
+   Player: Claudio  |  Enemies: Toughguy1 (mohawk recolor), Toughguy2
+   Backgrounds: gd1/gd2/gd3/gdalley tiled for variety
 ===================================================================== */
+class GodderDamScene extends Phaser.Scene {
+  constructor(){ super('GodderDamScene'); }
+  init(data){ this.music=data.music||null; }
+
+  preload(){
+    // Backgrounds
+    this.load.image('gd1','assets/bg/gd1.png');
+    this.load.image('gd2','assets/bg/gd2.png');
+    this.load.image('gd3','assets/bg/gd3.png');
+    this.load.image('gdalley','assets/bg/gdalley.png');
+    // Claudio player
+    // Claudio (new combo pack)
+    this.load.spritesheet('cl_idle',      'assets/claudio_gd/idle.png',      {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_walk',      'assets/claudio_gd/walk.png',      {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack1',   'assets/claudio_gd/attack1.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack2',   'assets/claudio_gd/attack2.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack3',   'assets/claudio_gd/attack3.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_knockback', 'assets/claudio_gd/knockback.png', {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_death',     'assets/claudio_gd/death.png',     {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_special',   'assets/claudio_gd/special.png',   {frameWidth:124,frameHeight:160});
+    // Boss (Father) — loaded for when boss fight is implemented
+    this.load.spritesheet('boss_idle',         'assets/boss/idle.png',         {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_walk',         'assets/boss/walk.png',         {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_quick_attack', 'assets/boss/quick_attack.png', {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_strong_attack','assets/boss/strong_attack.png',{frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_dash_attack',  'assets/boss/dash_attack.png',  {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_knockback',    'assets/boss/knockback.png',    {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_death',        'assets/boss/death.png',        {frameWidth:188,frameHeight:154});
+    // Toughguy1 (new matched pack)
+    this.load.spritesheet('tg1_walk',      'assets/toughguy1/walk.png',      {frameWidth:123,frameHeight:144});
+    this.load.spritesheet('tg1_attack',    'assets/toughguy1/attack.png',    {frameWidth:123,frameHeight:144});
+    this.load.spritesheet('tg1_death',     'assets/toughguy1/death.png',     {frameWidth:123,frameHeight:144});
+    this.load.spritesheet('tg1_knockback', 'assets/toughguy1/knockback.png', {frameWidth:123,frameHeight:144});
+    // Toughguy2 (new matched pack)
+    this.load.spritesheet('tg2_idle',      'assets/toughguy2/idle.png',      {frameWidth:109,frameHeight:127});
+    this.load.spritesheet('tg2_walk',      'assets/toughguy2/walk.png',      {frameWidth:109,frameHeight:127});
+    this.load.spritesheet('tg2_run',       'assets/toughguy2/run.png',       {frameWidth:109,frameHeight:127});
+    this.load.spritesheet('tg2_attack',    'assets/toughguy2/attack.png',    {frameWidth:109,frameHeight:127});
+    this.load.spritesheet('tg2_death',     'assets/toughguy2/death.png',     {frameWidth:109,frameHeight:127});
+    this.load.spritesheet('tg2_knockback', 'assets/toughguy2/knockback.png', {frameWidth:109,frameHeight:127});
+    // Daughter
+    this.load.spritesheet('d_idle',       'assets/daughter/idle-.png',          {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_walk',       'assets/daughter/walk.png',           {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_beg_idle',   'assets/daughter/begging_idle.png',   {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_standup',    'assets/daughter/stand_up_happy-.png',{frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_stopwalk',   'assets/daughter/stop_walk_beg.png',  {frameWidth:101,frameHeight:164});
+    this.load.audio('favorhouse','assets/A_Favor_house_atlantic_SNESremix.mp3');
+    if(!this.textures.exists('combo3x')) this.load.spritesheet('combo3x','assets/combo/combo3x.png',{frameWidth:128,frameHeight:128});
+    if(!this.textures.exists('combo6x')) this.load.spritesheet('combo6x','assets/combo/combo6x.png',{frameWidth:128,frameHeight:128});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.worldWidth=width*5;
+    this.gameOver=false;
+    this.allWavesCleared=false;
+    this.waveCountdownActive=false;
+    this.heroPower=0;
+    this.isSpecial=false;
+    // Clean up any leftover game-over overlay from a previous run
+    document.getElementById('gdGameOverOverlay')?.remove();
+    this.game.canvas.style.pointerEvents='';
+    this.events.once('shutdown',()=>{ document.getElementById('gdGameOverOverlay')?.remove(); this.game.canvas.style.pointerEvents=''; });
+    this.events.once('destroy', ()=>{ document.getElementById('gdGameOverOverlay')?.remove(); this.game.canvas.style.pointerEvents=''; });
+    // ── Attack string system ──
+    this._chainingNow=false; // suppresses animcomplete during early-chain
+    this._strStep=0;        // 0=idle, 1=jab, 2=cross, 3=finisher
+    this._strBuffered=false; // input pressed during anim — fire on cancel frame
+    this._strTimer=null;    // window to continue string
+    this._strCancelPending=false; // cancel frame reached, fire buffer if set
+    // ── Combo display ──
+    this._combo=0;
+    this._comboTimer=null;
+    this._comboSprite=null;
+
+    /* ── Background: tile 4 GD panels randomly across world ── */
+    this.cameras.main.setBounds(0,0,this.worldWidth,height);
+    const bgKeys=['gd1','gd2','gd3','gdalley'];
+    // Art content: y=288–708 (420px) inside 1536×1024 source. Black bars above/below.
+    // Scale so art exactly fills canvas height (pipes at top, ground at bottom).
+    const bgW_src=1536, bgH_src=1024, artTop=288, artBot=708;
+    const artH=artBot-artTop;          // 420px of real art
+    const bgScale=height/artH;         // 2.571 at 1080p
+    const scaledW=bgW_src*bgScale;
+    const scaledH=bgH_src*bgScale;
+    const bgY=-(artTop*bgScale);       // shift up so art top = canvas y=0
+    let bx=0;
+    while(bx<this.worldWidth+scaledW){
+      const key=bgKeys[Math.floor(Math.random()*bgKeys.length)];
+      this.add.image(bx, bgY, key)
+        .setOrigin(0,0)
+        .setDisplaySize(scaledW, scaledH)
+        .setDepth(0);
+      bx+=scaledW;
+    }
+    // Thin dark overlay
+    this.add.rectangle(0,0,this.worldWidth,height,0x000000,0.10).setOrigin(0,0).setDepth(1);
+
+    /* ── Animations ── */
+    const A=this.anims;
+    const _c=(cfg)=>{ if(!A.exists(cfg.key)) A.create(cfg); };
+    _c({key:'cl-idle',      frames:A.generateFrameNumbers('cl_idle',      {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'cl-walk',      frames:A.generateFrameNumbers('cl_walk',      {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'cl-attack1',   frames:A.generateFrameNumbers('cl_attack1',   {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'cl-attack2',   frames:A.generateFrameNumbers('cl_attack2',   {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'cl-attack3',   frames:A.generateFrameNumbers('cl_attack3',   {start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'cl-knockback', frames:A.generateFrameNumbers('cl_knockback', {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'cl-death',     frames:A.generateFrameNumbers('cl_death',     {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'cl-special',   frames:A.generateFrameNumbers('cl_special',   {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'boss-idle',         frames:A.generateFrameNumbers('boss_idle',         {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'boss-walk',         frames:A.generateFrameNumbers('boss_walk',         {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'boss-quick-attack', frames:A.generateFrameNumbers('boss_quick_attack', {start:0,end:15}), frameRate:16, repeat:0});
+    _c({key:'boss-strong-attack',frames:A.generateFrameNumbers('boss_strong_attack',{start:0,end:15}), frameRate:20, repeat:0});
+    _c({key:'boss-dash-attack',  frames:A.generateFrameNumbers('boss_dash_attack',  {start:0,end:15}), frameRate:24, repeat:0});
+    _c({key:'boss-knockback',    frames:A.generateFrameNumbers('boss_knockback',    {start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'boss-death',        frames:A.generateFrameNumbers('boss_death',        {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'tg1-walk',      frames:A.generateFrameNumbers('tg1_walk',      {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'tg1-attack',    frames:A.generateFrameNumbers('tg1_attack',    {start:0,end:15}), frameRate:24, repeat:0});
+    _c({key:'tg1-death',     frames:A.generateFrameNumbers('tg1_death',     {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'tg1-knockback', frames:A.generateFrameNumbers('tg1_knockback', {start:0,end:15}), frameRate:16, repeat:0});
+    _c({key:'tg2-idle',      frames:A.generateFrameNumbers('tg2_idle',      {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'tg2-walk',      frames:A.generateFrameNumbers('tg2_walk',      {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'tg2-run',       frames:A.generateFrameNumbers('tg2_run',       {start:0,end:15}), frameRate:14, repeat:-1});
+    _c({key:'tg2-attack',    frames:A.generateFrameNumbers('tg2_attack',    {start:0,end:15}), frameRate:24, repeat:0});
+    _c({key:'tg2-death',     frames:A.generateFrameNumbers('tg2_death',     {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'tg2-knockback', frames:A.generateFrameNumbers('tg2_knockback', {start:0,end:15}), frameRate:16, repeat:0});
+    _c({key:'d-idle',        frames:A.generateFrameNumbers('d_idle',        {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'d-walk',        frames:A.generateFrameNumbers('d_walk',        {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'d-beg-idle',    frames:A.generateFrameNumbers('d_beg_idle',    {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'d-standup',     frames:A.generateFrameNumbers('d_standup',     {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'d-stopwalk',    frames:A.generateFrameNumbers('d_stopwalk',    {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'combo-3x', frames:A.generateFrameNumbers('combo3x',{start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'combo-6x', frames:A.generateFrameNumbers('combo6x',{start:0,end:15}), frameRate:18, repeat:0});
+
+    /* ── Music ── */
+    this.sound.getAll().forEach(s=>{ if(s.isPlaying) s.stop(); });
+    this._music=this.sound.add('favorhouse',{loop:true,volume:0});
+    this._music.play();
+    this.tweens.add({targets:this._music, volume:0.66, duration:1500});
+    this.events.once('shutdown',()=>{ if(this._music&&this._music.isPlaying) this._music.stop(); });
+
+    /* ── CLAUDIO (player) ── */
+    // heroMinY = blue line (top limit), heroMaxY = green line (bottom limit)
+    this.heroMinY=height*0.848; this.heroMaxY=height*0.923;
+    const spawnY=this.heroMaxY-4;
+    this.hero=this.add.sprite(width*0.12, spawnY,'cl_idle').setScale(3.75).setDepth(50).setOrigin(0.5,1);
+    this.hero.play('cl-idle');
+    this.heroFacing=1;
+    this.isAttacking=false;
+    this.isKnockedBack=false;
+    this.heroHealth=15;
+    this.heroInvincible=false;
+    this.heroMinX=40; this.heroMaxX=this.worldWidth-40;
+    // Attack string animcomplete handlers
+    const _onJabCross=()=>{
+      if(this._chainingNow) return; // early-chain already handled, ignore stale animcomplete
+      this.isAttacking=false;
+      if(this._strBuffered){ this._strBuffered=false; this._fireStringStep(); }
+      else { this._strStep=0; if(!this.gameOver) this.hero.play('cl-idle',true); }
+    };
+    this.hero.on('animationcomplete-cl-attack1', _onJabCross);
+    this.hero.on('animationcomplete-cl-attack2', _onJabCross);
+    this.hero.on('animationcomplete-cl-attack3',()=>{
+      this.isAttacking=false;
+      this._strStep=0; this._strBuffered=false;
+      if(this._strTimer){ this._strTimer.remove(); this._strTimer=null; }
+      if(!this.gameOver) this.hero.play('cl-idle',true);
+    });
+    this.hero.on('animationcomplete-cl-special',()=>{ this.isAttacking=false; this.isSpecial=false; if(!this.gameOver) this.hero.play('cl-idle',true); });
+    this.hero.on('animationcomplete-cl-knockback',()=>{ this.isKnockedBack=false; if(!this.gameOver) this.hero.play('cl-idle',true); });
+    this.cameras.main.startFollow(this.hero,true,0.08,0.08);
+
+    /* ── UI ── */
+    this.add.text(20,14,'CLAUDIO',{fontFamily:'Arial Black',fontSize:'28px',color:'#ffffff',stroke:'#000',strokeThickness:4}).setScrollFactor(0).setDepth(1000);
+    this.add.text(20,50,'HP',{fontFamily:'Arial',fontSize:'14px',color:'#88ff88'}).setScrollFactor(0).setDepth(1000);
+    this.heroHealthBars=[];
+    const BAR_W=22, BAR_H=12, BAR_GAP=3;
+    for(let i=0;i<15;i++) this.heroHealthBars.push(
+      this.add.rectangle(54+i*(BAR_W+BAR_GAP),57,BAR_W,BAR_H,0x00dd00).setScrollFactor(0).setDepth(1000)
+    );
+    this.add.text(20,80,'PWR',{fontFamily:'Arial',fontSize:'14px',color:'#44ffee'}).setScrollFactor(0).setDepth(1000);
+    this.heroPowerBars=[];
+    for(let i=0;i<10;i++) this.heroPowerBars.push(
+      this.add.rectangle(54+i*(BAR_W+BAR_GAP),87,BAR_W,BAR_H,0x004444).setScrollFactor(0).setDepth(1000)
+    );
+    this.add.text(20,125,'LEVEL 3 — GODDER DAM',{fontFamily:'Arial',fontSize:'12px',color:'#44ffaa'}).setScrollFactor(0).setDepth(1000);
+    this.waveText=this.add.text(width-20,14,'',{fontFamily:'Arial',fontSize:'22px',color:'#ffdd44',align:'right'}).setOrigin(1,0).setScrollFactor(0).setDepth(1000);
+    this.countdownText=this.add.text(width/2,height*0.18,'',{
+      fontFamily:'Arial Black',fontSize:'110px',color:'#ffffff',stroke:'#000000',strokeThickness:10
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1500).setAlpha(0);
+
+    /* ── Score ── */
+    this._scoreLabel=this.add.text(width-28,60,'0000000',{
+      fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'44px',color:'#ffee00',
+      stroke:'#ffffff',strokeThickness:5,align:'right',
+      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:14,fill:true}
+    }).setOrigin(1,0).setScrollFactor(0).setDepth(5000);
+    this._scoreSwelling=false;
+
+    /* ── Input ── */
+    this.cursors=this.input.keyboard.createCursorKeys();
+    this.attackKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
+    this.specialKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+    this.speed=300;
+    // Force canvas focus so keyboard events register (especially after dev-menu navigation)
+    this.game.canvas.focus();
+    window.initMobileControls(this);
+
+    /* ── Enemies array ── */
+    this.enemies=[];
+
+    /* ── Wave config ──
+       Wave 1: tg1 only (5)
+       Wave 2: tg1 + tg2 (3+2)
+       Wave 3: 2 tg1 + 1 tg2 per spawn × 3 = 6+3
+       Wave 4: 2 tg1 + 2 tg2 = 8
+       Wave 5: same as wave 4 = 8
+    ── */
+    this.waveConfig=[
+      {threshold:0,                     spawns:[{type:'tg1',count:1}]},
+      {threshold:this.worldWidth*0.20,  spawns:[{type:'tg1',count:2},{type:'tg2',count:1}]},
+      {threshold:this.worldWidth*0.38,  spawns:[{type:'tg1',count:3},{type:'tg2',count:2}]},
+      {threshold:this.worldWidth*0.56,  spawns:[{type:'tg1',count:3},{type:'tg2',count:3}]},
+      {threshold:this.worldWidth*0.74,  spawns:[{type:'tg1',count:4},{type:'tg2',count:3}]},
+    ];
+    this.wavesTriggered=0;
+    this._spawnWave(0);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SPAWN HELPERS
+  ══════════════════════════════════════════════════════════ */
+  _spawnTG1(x,y){
+    const e=this.add.sprite(x,y,'tg1_walk').setScale(4.5).setDepth(10).setOrigin(0.5,1);
+    e.type='tg1'; e.hp=3; e.dead=false; e.baseScale=4.5;
+    e.attackCooldown=0; e.isAttacking=false; e.isKnockedBack=false;
+    e.healthBars=this._makeHealthBars(3,0xffaa00);
+    e.play('tg1-walk');
+    e.setFlipX(true);
+    e.on('animationcomplete-tg1-attack',()=>{ e.isAttacking=false; if(!e.dead) e.play('tg1-walk',true); });
+    e.on('animationcomplete-tg1-knockback',()=>{
+      e.setScale(e.baseScale);
+      if(!e._kbTween){ e.isKnockedBack=false; if(!e.dead) e.play('tg1-walk',true); }
+    });
+    this.enemies.push(e);
+    return e;
+  }
+
+  _spawnTG2(x,y){
+    const e=this.add.sprite(x,y,'tg2_walk').setScale(4.5).setDepth(10).setOrigin(0.5,1);
+    e.type='tg2'; e.hp=3; e.dead=false; e.baseScale=4.5;
+    e.attackCooldown=0; e.isAttacking=false; e.isRunning=false; e.isKnockedBack=false;
+    e.healthBars=this._makeHealthBars(3,0x44aaff);
+    e.play('tg2-walk');
+    e.setFlipX(true);
+    e.on('animationcomplete-tg2-attack',()=>{ e.isAttacking=false; if(!e.dead) e.play('tg2-walk',true); });
+    e.on('animationcomplete-tg2-knockback',()=>{
+      e.setScale(e.baseScale);
+      if(!e._kbTween){ e.isKnockedBack=false; if(!e.dead) e.play('tg2-walk',true); }
+    });
+    this.enemies.push(e);
+    return e;
+  }
+
+  _makeHealthBars(count,color){
+    const bars=[];
+    for(let i=0;i<count;i++) bars.push(this.add.rectangle(0,0,8,4,color).setDepth(20));
+    return bars;
+  }
+
+  _killEnemy(e){
+    if(!e||e.dead) return;
+    e.dead=true;
+    e.isKnockedBack=true;
+    e.healthBars.forEach(b=>b.destroy());
+    const pts=e.type==='tg1'?650:750;
+    this._addScore(pts,e.x,e.y-40);
+    this.cameras.main.shake(200,0.022);
+    // Kill hitstop
+    this.hero.anims.pause();
+    this.time.delayedCall(80,()=>{ if(!this.gameOver) this.hero.anims.resume(); });
+
+    // Stop any existing kb tween
+    if(e._kbTween){ e._kbTween.stop(); e._kbTween=null; }
+
+    // Massive death launch — fast snap then long skid
+    const kbSnap=e.x+this.heroFacing*180;
+    const kbFinal=kbSnap+this.heroFacing*380;
+    this.tweens.add({
+      targets:e, x:kbSnap, duration:80, ease:'Cubic.Out',
+      onComplete:()=>{
+        this.tweens.add({targets:e, x:kbFinal, duration:500, ease:'Quad.Out'});
+      }
+    });
+
+    // Play knockback briefly, then death anim
+    const kbKey=e.type==='tg1'?'tg1-knockback':'tg2-knockback';
+    e.setScale(e.baseScale*0.88);
+    e.play(kbKey,true);
+    this.time.delayedCall(180,()=>{
+      if(!e.active) return;
+      e.setScale(e.baseScale);
+      const dKey=e.type==='tg1'?'tg1-death':'tg2-death';
+      e.play(dKey,true);
+      e.once('animationcomplete-'+dKey,()=>{
+        e.anims.stop(); e.setFrame(15); e.setDepth(5);
+        this.time.delayedCall(6000,()=>{ if(e.active) this.tweens.add({targets:e,alpha:0,duration:1200,onComplete:()=>e.destroy()}); });
+      });
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     WAVE SYSTEM
+  ══════════════════════════════════════════════════════════ */
+  _spawnWave(waveIndex){
+    const {height,width}=this.scale;
+    const cfg=this.waveConfig[waveIndex];
+    const camLeft=this.cameras.main.scrollX;
+    const camRight=camLeft+width;
+    cfg.spawns.forEach(group=>{
+      for(let i=0;i<group.count;i++){
+        // Alternate left/right spawn so enemies come from both sides
+        const fromRight=(i%2===0);
+        const sx=fromRight
+          ? camRight+100+Phaser.Math.Between(i*60, i*60+200)
+          : camLeft -100-Phaser.Math.Between(i*60, i*60+200);
+        const sy=Phaser.Math.Between(this.heroMinY, this.heroMaxY);
+        const e=group.type==='tg1' ? this._spawnTG1(sx,sy) : this._spawnTG2(sx,sy);
+        // Pre-assign flank side based on spawn side so they head to opposite sides
+        e._flankSide=fromRight ? 'right' : 'left';
+        const idx=i;
+        e._flankOffset=(idx%3===0)?0:(idx%3===1)?45:-45;
+      }
+    });
+    this.wavesTriggered++;
+    this.waveText.setText(`WAVE ${this.wavesTriggered} / ${this.waveConfig.length}`);
+    if(waveIndex===0) this._showAnnounce('FIGHT!','#ffdd44');
+    else              this._showAnnounce(`WAVE ${this.wavesTriggered}  INCOMING!`,'#ff6622');
+  }
+
+  _startWaveCountdown(waveIndex){
+    if(this.waveCountdownActive) return;
+    this.waveCountdownActive=true;
+    let count=3;
+    this.countdownText.setAlpha(1).setText('3').setColor('#ffdd44').setY(this.scale.height*0.18);
+    const tick=()=>{
+      count--;
+      if(count>0){
+        this.countdownText.setText(count.toString());
+        this.tweens.add({targets:this.countdownText,scaleX:1.4,scaleY:1.4,duration:100,yoyo:true});
+        this.time.delayedCall(1000,tick);
+      } else {
+        this.countdownText.setText('FIGHT!').setColor('#ff4422');
+        this.tweens.add({targets:this.countdownText,alpha:0,y:this.countdownText.y-40,duration:900,
+          onComplete:()=>{ this.countdownText.setAlpha(0).setY(this.scale.height*0.18); }});
+        this._spawnWave(waveIndex);
+        this.waveCountdownActive=false;
+      }
+    };
+    this.time.delayedCall(1000,tick);
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     PLAYER DAMAGE
+  ══════════════════════════════════════════════════════════ */
+  _damageHero(){
+    if(this.heroInvincible||this.gameOver) return;
+    this.heroHealth--;
+    // Update HP bars
+    if(this.heroHealth>=0) this.heroHealthBars[this.heroHealth]?.setFillStyle(0x333333);
+    this.cameras.main.shake(200,0.012);
+    // Flash red
+    this.hero.setTint(0xff3333);
+    this.time.delayedCall(80,()=>this.hero.clearTint());
+    if(this.heroHealth<=0){ this._triggerDeath(); return; }
+    // Knockback anim + 2s invincibility with flash
+    this.isKnockedBack=true; this.isAttacking=false; this.isSpecial=false; this.heroInvincible=true;
+    this.hero.play('cl-knockback',true);
+    const kbDir=this.heroFacing*-1;
+    this.tweens.add({targets:this.hero,x:this.hero.x+kbDir*60,duration:200,ease:'Sine.Out'});
+    // Safety: force-clear isKnockedBack after anim duration in case animcomplete misfires
+    this.time.delayedCall(900,()=>{ this.isKnockedBack=false; });
+    // Flash for 2 seconds
+    if(this._invincFlash) this._invincFlash.stop();
+    this._invincFlash=this.tweens.add({
+      targets:this.hero, alpha:0.25, duration:120, ease:'Linear',
+      yoyo:true, repeat:-1
+    });
+    // End invincibility after 2s
+    if(this._invincTimer) this._invincTimer.remove();
+    this._invincTimer=this.time.delayedCall(2000,()=>{
+      this.heroInvincible=false;
+      if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+      this.hero.setAlpha(1);
+    });
+  }
+
+  _triggerDeath(){
+    if(this.gameOver) return;
+    this.gameOver=true;
+    if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+    this.hero.setAlpha(1);
+    this.hero.play('cl-death',true);
+    this.cameras.main.shake(700,0.025);
+    if(typeof gtag!=='undefined') gtag('event','game_over',{level:3,score:window.SCORE||0});
+    this.time.delayedCall(1200,()=>{
+      const {width,height}=this.scale;
+      // Store canvas objects so _doContinue can destroy them
+      this._goOverlayRect=this.add.rectangle(width/2,height/2,width,height,0x000000,0.78).setScrollFactor(0).setDepth(2000);
+      this._goOverlayText=this.add.text(width/2,height*0.32,'GAME OVER',{
+        fontFamily:'Arial Black',fontSize:'88px',color:'#ff2222',stroke:'#000000',strokeThickness:8
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+
+      // Disable canvas pointer events so DOM buttons receive touches unobstructed
+      this.game.canvas.style.pointerEvents='none';
+
+      // DOM buttons — reliable on mobile
+      const overlay=document.createElement('div');
+      overlay.id='gdGameOverOverlay';
+      overlay.style.cssText=[
+        'position:fixed','top:0','left:0','width:100%','height:100%',
+        'display:flex','flex-direction:column','align-items:center','justify-content:center',
+        'gap:28px','z-index:9999','pointer-events:none'
+      ].join(';');
+
+      const makeBtn=(label,bg,cb)=>{
+        const b=document.createElement('button');
+        b.textContent=label;
+        b.style.cssText=[
+          `background:${bg}`,
+          'color:#ffffff',
+          'font-family:Arial Black, sans-serif',
+          'font-size:clamp(22px,4vw,42px)',
+          'font-weight:900',
+          'padding:18px 56px',
+          'border:4px solid #ffffff',
+          'border-radius:12px',
+          'cursor:pointer',
+          'pointer-events:auto',
+          'touch-action:manipulation',
+          '-webkit-tap-highlight-color:transparent',
+          'text-shadow:2px 2px 0 #000000',
+          'box-shadow:0 6px 0 rgba(0,0,0,0.5)',
+          'min-width:260px',
+          'letter-spacing:2px'
+        ].join(';');
+        b.addEventListener('pointerdown',cb,{passive:false});
+        return b;
+      };
+
+      const cleanupOverlay=()=>{
+        document.getElementById('gdGameOverOverlay')?.remove();
+        // Restore canvas input
+        this.game.canvas.style.pointerEvents='';
+        // Destroy the Phaser canvas objects
+        if(this._goOverlayRect){ this._goOverlayRect.destroy(); this._goOverlayRect=null; }
+        if(this._goOverlayText){ this._goOverlayText.destroy(); this._goOverlayText=null; }
+      };
+
+      const btnContinue=makeBtn('CONTINUE','#1a7a1a',()=>{
+        cleanupOverlay();
+        this._doContinue();
+      });
+      const btnRetry=makeBtn('RETRY','#8a1a1a',()=>{
+        cleanupOverlay();
+        if(this.crowing&&this.crowing.isPlaying) this.crowing.stop();
+        this.scene.restart({music:null});
+      });
+
+      // Small label under buttons
+      const hint=document.createElement('div');
+      hint.innerHTML='<span style="color:#aaaaaa;font-family:Arial,sans-serif;font-size:clamp(13px,2vw,20px);text-shadow:1px 1px 0 #000">CONTINUE — keep fighting &nbsp;|&nbsp; RETRY — start level over</span>';
+
+      overlay.appendChild(btnContinue);
+      overlay.appendChild(btnRetry);
+      overlay.appendChild(hint);
+      document.body.appendChild(overlay);
+    });
+  }
+
+  _docontinue(){ this._doContinue(); } // lowercase alias just in case
+  _doContinue(){
+    // Restore Claudio to full health and invincibility, keep enemy/wave state
+    this.gameOver=false;
+    this.heroHealth=15;
+    this.heroHealthBars.forEach((b,i)=>b.setFillStyle(0x44ff44));
+    this.heroPower=0;
+    this.heroPowerBars.forEach(b=>b.setFillStyle(0x004444));
+    this.isAttacking=false; this.isKnockedBack=false; this.isSpecial=false;
+    this._strStep=0; this._strBuffered=false;
+    if(this._strTimer){ this._strTimer.remove(); this._strTimer=null; }
+    if(this._invincTimer){ this._invincTimer.remove(); this._invincTimer=null; }
+    if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+
+    // Respawn hero at current camera center, same Y
+    const cx=this.cameras.main.scrollX + this.scale.width/2;
+    this.hero.setPosition(cx, this.hero.y);
+    this.hero.setAlpha(1);
+    this.hero.play('cl-idle',true);
+
+    // 3 seconds of invincibility so player can get their bearings
+    this.heroInvincible=true;
+    this._invincFlash=this.tweens.add({
+      targets:this.hero, alpha:0.3, duration:150, ease:'Linear', yoyo:true, repeat:-1
+    });
+    this._invincTimer=this.time.delayedCall(3000,()=>{
+      this.heroInvincible=false;
+      if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+      this.hero.setAlpha(1);
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     ATTACK HIT DETECTION
+  ══════════════════════════════════════════════════════════ */
+  _checkPunchHits(){
+    if(!this.isAttacking) return;
+    const RANGE=240, VERT=130;
+    const hx=this.hero.x, hy=this.hero.y;
+    this.enemies.filter(e=>e.active&&!e.dead).forEach(e=>{
+      const dx=(e.x-hx)*this.heroFacing;
+      const dy=Math.abs(e.y-hy);
+      if(dx>0&&dx<RANGE&&dy<VERT&&!e._hitThisSwing){
+        e._hitThisSwing=true;
+        const dmg=(this._strStep===3)?2:1;
+        e.hp=Math.max(0,e.hp-dmg);
+        // Dim health bars for damage taken
+        const barsToKill=Math.min(dmg, e.healthBars.filter(b=>b.fillColor!==0x333333).length);
+        let dimmed=0;
+        for(let bi=e.healthBars.length-1;bi>=0&&dimmed<dmg;bi--){
+          if(e.healthBars[bi].fillColor!==0x333333){ e.healthBars[bi].setFillStyle(0x333333); dimmed++; }
+        }
+        // Charge power meter
+        this.heroPower=Math.min(this.heroPower+1,10);
+        this.heroPowerBars.forEach((b,i)=>b.setFillStyle(i<this.heroPower?0x00ffdd:0x004444));
+
+        // ── HITSTOP: freeze Claudio only ──
+        this.hero.anims.pause();
+        this.time.delayedCall(60,()=>{ if(!this.gameOver) this.hero.anims.resume(); });
+
+        // ── HIT FLASH ──
+        if(!e.dead){ e.setTint(0xff8855); this.time.delayedCall(70,()=>{ if(e.active) e.clearTint(); }); }
+
+        // ── STRONGER SHAKE ──
+        this.cameras.main.shake(80,0.010);
+
+        // ── HIT SPARKS ──
+        this._spawnHitSparks(e.x - this.heroFacing*20, e.y - 40);
+
+        // ── KNOCKBACK — stagger on jab/cross, launch on finisher ──
+        const isFinisher=(this._strStep===3);
+        e.isAttacking=false;
+        if(e._kbTween){ e._kbTween.stop(); e._kbTween=null; }
+
+        if(e.hp<=0){
+          this._updateComboDisplay(isFinisher);
+          e.isKnockedBack=true;
+          const kbKey=e.type==='tg1'?'tg1-knockback':'tg2-knockback';
+          e.setScale(e.baseScale*0.88);
+          e.play(kbKey,true);
+          this._killEnemy(e);
+        } else if(isFinisher){
+          this._updateComboDisplay(true);
+          e.isKnockedBack=true;
+          const kbKey=e.type==='tg1'?'tg1-knockback':'tg2-knockback';
+          e.setScale(e.baseScale*0.88);
+          e.play(kbKey,true);
+          // Big launch: snap then skid
+          const kbSnap=e.x+this.heroFacing*120;
+          const kbSkid=kbSnap+this.heroFacing*160;
+          e._kbTween=this.tweens.add({
+            targets:e, x:kbSnap, duration:90, ease:'Cubic.Out',
+            onComplete:()=>{
+              if(e.dead) return;
+              e._kbTween=this.tweens.add({
+                targets:e, x:kbSkid, duration:280, ease:'Quad.Out',
+                onComplete:()=>{ e._kbTween=null; e.setScale(e.baseScale); e.isKnockedBack=false; if(!e.dead) e.play(e.type==='tg1'?'tg1-walk':'tg2-walk',true); }
+              });
+            }
+          });
+        } else {
+          // Jab/cross: visible stagger with knockback anim, stays in combo range
+          e.isKnockedBack=true;
+          const kbKey=e.type==='tg1'?'tg1-knockback':'tg2-knockback';
+          e.setScale(e.baseScale*0.88);
+          e.play(kbKey,true);
+          const stagger=this.heroFacing*80;
+          e._kbTween=this.tweens.add({
+            targets:e, x:e.x+stagger, duration:120, ease:'Cubic.Out',
+            onComplete:()=>{ e._kbTween=null; e.setScale(e.baseScale); e.isKnockedBack=false; if(!e.dead) e.play(e.type==='tg1'?'tg1-walk':'tg2-walk',true); }
+          });
+        }
+      }
+    });
+  }
+
+  _fireStringStep(){
+    // Advance the string: 0→jab(1), 1→cross(2), 2→finisher(3), 3→wrap to jab(1)
+    if(this._strStep>=3) this._strStep=0;
+    this._strStep++;
+    this.isAttacking=true;
+    this._strBuffered=false;
+
+    // Push Claudio forward 10px in punch direction on every step
+    this.hero.x += this.heroFacing * 10;
+
+    // Refresh string window — 500ms to tap again and continue
+    if(this._strTimer) this._strTimer.remove();
+    this._strTimer=this.time.delayedCall(500,()=>{
+      this._strStep=0;
+      this._strTimer=null;
+    });
+
+    if(this._strStep===3){
+      // Finisher — attack3, two hit checks
+      this.hero.play('cl-attack3',true);
+      this.enemies.forEach(e=>e._hitThisSwing=false);
+      this.time.delayedCall(150,()=>this._checkPunchHits());
+      this.time.delayedCall(320,()=>{ this.enemies.forEach(e=>e._hitThisSwing=false); this._checkPunchHits(); });
+      // Safety: force-clear isAttacking after finisher anim duration
+      this.time.delayedCall(1000,()=>{ if(this.isAttacking&&this._strStep===0) this.isAttacking=false; });
+    } else {
+      // Jab (step 1) = attack1, Cross (step 2) = attack2
+      const animKey=this._strStep===1?'cl-attack1':'cl-attack2';
+      this.hero.play(animKey,true);
+      this.enemies.forEach(e=>e._hitThisSwing=false);
+      this.time.delayedCall(140,()=>this._checkPunchHits());
+      // Cancel frame at ~55% (~400ms) — chain to next step if buffered
+      this.time.delayedCall(400,()=>{
+        if(this._strBuffered && this.isAttacking){
+          this._strBuffered=false;
+          this._chainingNow=true;   // block stale animcomplete
+          this.hero.anims.stop();
+          this.isAttacking=false;
+          this._fireStringStep();
+          this._chainingNow=false;  // clear immediately — new anim is already playing
+        }
+      });
+    }
+  }
+
+  _spawnHitSparks(x,y){
+    const gfx=this.add.graphics().setDepth(300);
+    const sparks=[];
+    for(let i=0;i<6;i++){
+      const angle=Math.random()*Math.PI*2;
+      const speed=Phaser.Math.Between(60,130);
+      sparks.push({vx:Math.cos(angle)*speed, vy:Math.sin(angle)*speed-40, x, y, life:1});
+    }
+    let elapsed=0;
+    const update=(_,delta)=>{
+      elapsed+=delta;
+      const t=elapsed/220;
+      gfx.clear();
+      sparks.forEach(s=>{
+        s.x+=s.vx*(delta/1000);
+        s.y+=s.vy*(delta/1000);
+        s.vy+=300*(delta/1000);
+        const a=(1-t)*0.9;
+        if(a>0){
+          gfx.fillStyle(t<0.4?0xffffff:0xffcc00,a);
+          gfx.fillCircle(s.x,s.y,3*(1-t*0.5));
+        }
+      });
+      if(elapsed>=220){ this.events.off('update',update); gfx.destroy(); }
+    };
+    this.events.on('update',update);
+  }
+
+  _updateComboDisplay(isFinisher=false){
+    if(!isFinisher) return;
+    const {width,height}=this.scale;
+    this._combo++;
+    if(this._comboTimer) this._comboTimer.remove();
+    this._comboTimer=this.time.delayedCall(3000,()=>{ this._combo=0; });
+    // 3x on odd finishers, 6x on even finishers
+    const trigger=this._combo%2===0?'combo-6x':'combo-3x';
+    if(this._comboSprite&&this._comboSprite.active){ this._comboSprite.destroy(); this._comboSprite=null; }
+    const tex=trigger==='combo-3x'?'combo3x':'combo6x';
+    const sx=this.hero.x, sy=this.hero.y - this.hero.displayHeight - 20;
+    const spr=this.add.sprite(sx,sy,tex).setScale(2.8).setDepth(1600).setOrigin(0.5,1).setAlpha(0);
+    spr.play(trigger);
+    this._comboSprite=spr;
+    this.tweens.add({targets:spr,alpha:1,duration:60});
+    spr.once('animationcomplete',()=>{
+      if(!spr.active) return;
+      this.tweens.add({targets:spr,alpha:0,duration:250,onComplete:()=>{ if(spr.active) spr.destroy(); if(this._comboSprite===spr) this._comboSprite=null; }});
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SCORE
+  ══════════════════════════════════════════════════════════ */
+  _addScore(pts,x,y){
+    window.SCORE=(window.SCORE||0)+pts;
+    this._scoreLabel.setText(String(window.SCORE).padStart(7,'0'));
+    if(!this._scoreSwelling){
+      this._scoreSwelling=true;
+      this.tweens.add({targets:this._scoreLabel,scaleX:1.3,scaleY:1.3,duration:100,ease:'Sine.Out',yoyo:true,
+        onComplete:()=>{ this._scoreSwelling=false; this._scoreLabel.setScale(1); }});
+    }
+    const col=pts>=700?'#ff6644':'#ffdd00';
+    const lbl=this.add.text(x,y-20,'+'+pts,{
+      fontFamily:'"Arial Black"',fontSize:'28px',color:col,stroke:'#000',strokeThickness:4
+    }).setOrigin(0.5,1).setDepth(4000);
+    this.tweens.add({targets:lbl,y:lbl.y-60,alpha:0,duration:900,onComplete:()=>lbl.destroy()});
+  }
+
+  _showAnnounce(msg,color='#ffdd44'){
+    const {width,height}=this.scale;
+    const t=this.add.text(width/2,height*0.30,msg,{
+      fontFamily:'Arial Black',fontSize:'52px',color,stroke:'#000000',strokeThickness:6
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1500);
+    this.tweens.add({targets:t,alpha:0,y:t.y-60,duration:1800,onComplete:()=>t.destroy()});
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     SPECIAL BLAST
+  ══════════════════════════════════════════════════════════ */
+  _fireSpecialBlast(){
+    const {width,height}=this.scale;
+    const targets=[...this.enemies].filter(e=>e.active&&!e.dead);
+    if(targets.length===0){ this._showAnnounce('SPECIAL!!','#00ffaa'); return; }
+
+    const PULL_MS   = 500;   // enemies suck toward Claudio
+    const HOLD_MS   = 80;    // brief hold at center before blast
+    const BLAST_MS  = 350;   // explosion rings expand
+
+    // ── Darkness overlay — screen dims as energy builds ──
+    const dark=this.add.rectangle(0,0,width,height,0x001a00,0)
+      .setOrigin(0,0).setScrollFactor(0).setDepth(590);
+    this.tweens.add({targets:dark, alpha:0.55, duration:PULL_MS, ease:'Sine.In'});
+
+    // ── Vortex graphics object (world-space, follows camera) ──
+    const vgfx=this.add.graphics().setDepth(595);
+    // ── Blast graphics (screen-space) ──
+    const bgfx=this.add.graphics().setDepth(601).setScrollFactor(0);
+
+    // Claudio's chest — the pull point
+    const cx=this.hero.x;
+    const cy=this.hero.y - 80;
+
+    // ── PHASE 1: pull all enemies toward Claudio ──
+    targets.forEach(e=>{
+      e._pullOrigX=e.x;
+      e._pullOrigY=e.y;
+      e.isKnockedBack=true; // freeze AI during pull
+      // Tween them to cluster near Claudio — clamp Y to floor
+      const offX=(Math.random()-0.5)*60;
+      const offY=(Math.random()-0.5)*30;
+      const pullY=Phaser.Math.Clamp(cy+offY+80, this.heroMinY, this.heroMaxY);
+      this.tweens.add({
+        targets:e,
+        x:cx+offX, y:pullY,
+        duration:PULL_MS,
+        ease:'Cubic.In'
+      });
+    });
+
+    // ── Vortex spiral: spinning rings tightening toward Claudio ──
+    let vAngle=0;
+    let vElapsed=0;
+    const vUpdate=(_,delta)=>{
+      vElapsed+=delta;
+      if(vElapsed>PULL_MS){ this.events.off('update',vUpdate); vgfx.destroy(); return; }
+      const pt=vElapsed/PULL_MS;
+      vgfx.clear();
+      // Several concentric rings shrinking inward
+      for(let r=0;r<5;r++){
+        const baseR=180+r*60;
+        const radius=baseR*(1-pt*0.85);
+        const alpha=(1-r*0.15)*0.7*pt;
+        const segments=32;
+        vgfx.lineStyle(3-r*0.4,0x00ff88,alpha);
+        vgfx.beginPath();
+        for(let s=0;s<=segments;s++){
+          const a=(s/segments)*Math.PI*2 + vAngle*(1+r*0.3);
+          const px=cx+Math.cos(a)*radius;
+          const py=cy+Math.sin(a)*radius*0.45;
+          s===0?vgfx.moveTo(px,py):vgfx.lineTo(px,py);
+        }
+        vgfx.strokePath();
+      }
+      // Inner bright core building up
+      const coreR=8+pt*22;
+      vgfx.fillStyle(0x00ffaa, pt*0.9);
+      vgfx.fillCircle(cx,cy,coreR);
+      vgfx.lineStyle(4,0xffffff,pt*0.8);
+      vgfx.strokeCircle(cx,cy,coreR+4);
+      vAngle+=delta*0.006;
+    };
+    this.events.on('update',vUpdate);
+
+    // ── PHASE 2: EXPLOSION after pull completes ──
+    this.time.delayedCall(PULL_MS+HOLD_MS, ()=>{
+      // Kill darkness
+      this.tweens.add({targets:dark, alpha:0, duration:200, onComplete:()=>dark.destroy()});
+
+      // Instant white-green flash
+      const flash=this.add.rectangle(0,0,width,height,0xffffff,1)
+        .setOrigin(0,0).setScrollFactor(0).setDepth(605);
+      this.tweens.add({targets:flash, alpha:0, duration:250, onComplete:()=>flash.destroy()});
+
+      // Camera blast
+      this.cameras.main.shake(600,0.035);
+
+      // ── Launch enemies outward from Claudio ──
+      targets.forEach(e=>{
+        if(!e.active||e.dead) return;
+        // Direction away from Claudio
+        const dx=e.x-cx, dy=e.y-cy;
+        const dist=Math.max(1,Math.hypot(dx,dy));
+        const launchDist=width*0.7;
+        const tx=e.x+(dx/dist)*launchDist;
+        const tyRaw=e.y+(dy/dist)*(launchDist*0.4);
+        const ty=Phaser.Math.Clamp(tyRaw, this.heroMinY, this.heroMaxY);
+        this.tweens.add({
+          targets:e,
+          x:tx, y:ty,
+          duration:BLAST_MS,
+          ease:'Cubic.Out',
+          onComplete:()=>{
+            if(e.active&&!e.dead) this._killEnemy(e);
+          }
+        });
+      });
+
+      // ── Expanding blast rings (screen-space, centered) ──
+      const bx=width/2, by=height/2;
+      let bElapsed=0;
+      const bUpdate=(_,delta)=>{
+        bElapsed+=delta;
+        if(bElapsed>BLAST_MS+200){ this.events.off('update',bUpdate); bgfx.destroy(); return; }
+        const pt=Math.min(1,bElapsed/BLAST_MS);
+        bgfx.clear();
+        // 4 rings expanding outward at different speeds
+        const ringData=[
+          {speed:1.0, thick:28, col:0x88ffcc, maxR:width*1.8},
+          {speed:0.78,thick:18, col:0x00ff88, maxR:width*1.5},
+          {speed:0.58,thick:12, col:0x00ee66, maxR:width*1.1},
+          {speed:0.38,thick:6,  col:0x00ff44, maxR:width*0.7},
+          {speed:0.20,thick:3,  col:0x44ffaa, maxR:width*0.4},
+        ];
+        ringData.forEach(({speed,thick,col,maxR})=>{
+          const r=pt*speed*maxR;
+          const a=Math.max(0,1-r/maxR)*0.9;
+          if(a>0.02){
+            bgfx.lineStyle(thick,col,a);
+            bgfx.strokeCircle(bx,by,r);
+          }
+        });
+        // Central glow fading
+        const gA=Math.max(0,0.8-pt*0.8);
+        if(gA>0.01){
+          bgfx.fillStyle(0x00ff88,gA*0.5);
+          bgfx.fillCircle(bx,by,200*(1-pt));
+          bgfx.fillStyle(0xaaffcc,gA*0.3);
+          bgfx.fillCircle(bx,by,100*(1-pt));
+        }
+      };
+      this.events.on('update',bUpdate);
+
+      // Announce
+      this._showAnnounce('SPECIAL!!','#00ffaa');
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     UPDATE LOOP
+  ══════════════════════════════════════════════════════════ */
+  update(time,delta){
+    if(this.gameOver) return;
+    if(this._cutsceneActive){
+      // Reposition any live cutscene bubbles
+      if(this._cutBubbles) this._cutBubbles.forEach(b=>b.reposition());
+      return;
+    }
+    const {height}=this.scale;
+    const move=(this.speed*delta)/1000;
+
+    /* ── Wave trigger check ── */
+    for(let w=this.wavesTriggered;w<this.waveConfig.length;w++){
+      if(this.hero.x>=this.waveConfig[w].threshold){
+        this._startWaveCountdown(w); break;
+      }
+    }
+
+    /* ── All waves cleared check ── */
+    if(!this.allWavesCleared
+       &&this.wavesTriggered>=this.waveConfig.length
+       &&this.enemies.filter(e=>e.active&&!e.dead).length===0){
+      this.allWavesCleared=true;
+      if(typeof gtag!=='undefined') gtag('event','level_complete',{level:3,score:window.SCORE||0});
+      this._showAnnounce('LEVEL CLEAR!','#44ffaa');
+      this.time.delayedCall(2500,()=>{ this._triggerBossCutscene(); });
+    }
+
+    /* ── Player input ── */
+    const _L = this.cursors.left.isDown  || (window.IS_MOBILE&&window.VPAD.left);
+    const _R = this.cursors.right.isDown || (window.IS_MOBILE&&window.VPAD.right);
+    const _U = this.cursors.up.isDown    || (window.IS_MOBILE&&window.VPAD.up);
+    const _D = this.cursors.down.isDown  || (window.IS_MOBILE&&window.VPAD.down);
+    const _mobileEvt = window.IS_MOBILE ? (window.VPAD_QUEUE[0]||null) : null;
+    const _atkNow        = window.IS_MOBILE ? (_mobileEvt==='attack'||_mobileEvt==='two_punch' ? (window.VPAD_QUEUE.shift(),true) : false) : Phaser.Input.Keyboard.JustDown(this.attackKey);
+
+    // (long-press removed — attack string system handles input)
+
+    /* ── Movement (blocked while attacking/knocked back) ── */
+    let moving=false;
+    if(!this.isAttacking&&!this.isKnockedBack){
+      if(_L){ this.hero.x-=move; this.heroFacing=-1; this.hero.setFlipX(true);  moving=true; }
+      else if(_R){ this.hero.x+=move; this.heroFacing=1; this.hero.setFlipX(false); moving=true; }
+      if(_U){ this.hero.y-=move*0.55; moving=true; }
+      else if(_D){ this.hero.y+=move*0.55; moving=true; }
+      this.hero.x=Phaser.Math.Clamp(this.hero.x,this.heroMinX,this.heroMaxX);
+      this.hero.y=Phaser.Math.Clamp(this.hero.y,this.heroMinY,this.heroMaxY);
+
+      // Idle/walk anim
+      if(moving){
+        if(this.hero.anims.currentAnim?.key!=='cl-walk') this.hero.play('cl-walk',true);
+      } else {
+        if(this.hero.anims.currentAnim?.key!=='cl-idle') this.hero.play('cl-idle',true);
+      }
+    }
+
+    /* ── Attack string: tap F to chain jab → cross → finisher ── */
+    if(_atkNow && !this.isKnockedBack && !this.isSpecial){
+      if(!this.isAttacking){
+        // Not attacking — start or continue string
+        this._fireStringStep();
+      } else {
+        // Currently attacking — buffer the input
+        this._strBuffered=true;
+      }
+    }
+
+    /* ── Special attack trigger (G key / mobile power) ── */
+    const _specNow = window.IS_MOBILE
+      ? (window.VPAD_QUEUE[0]==='power' ? (window.VPAD_QUEUE.shift(),true) : false)
+      : Phaser.Input.Keyboard.JustDown(this.specialKey);
+    if(_specNow && this.heroPower>=10 && !this.isAttacking && !this.isKnockedBack && !this.isSpecial){
+      this.isSpecial=true;
+      this.isAttacking=true;
+      this.hero.play('cl-special',true);
+      this.heroPower=0;
+      this.heroPowerBars.forEach(b=>b.setFillStyle(0x004444));
+      this.time.delayedCall(650,()=>this._fireSpecialBlast());
+      // Safety: force-clear both flags after anim should have finished (16fr@12fps ≈ 1350ms)
+      this.time.delayedCall(1600,()=>{ this.isSpecial=false; this.isAttacking=false; });
+    }
+
+    /* ── Enemy AI ── */
+    this.enemies=this.enemies.filter(e=>e.active);
+    const alive=this.enemies.filter(e=>!e.dead);
+
+    alive.forEach(e=>{
+      if(!e.active) return;
+      const dx=this.hero.x-e.x, dy=this.hero.y-e.y;
+      const dist=Math.hypot(dx,dy);
+      e.setFlipX(e.x>this.hero.x);
+      e.attackCooldown-=delta;
+
+      // ── Enemy-enemy separation: push away from other enemies ──
+      if(!e.isKnockedBack){
+        alive.forEach(other=>{
+          if(other===e||!other.active) return;
+          const ox=e.x-other.x, oy=e.y-other.y;
+          const od=Math.hypot(ox,oy);
+          const SEP=180;
+          if(od<SEP&&od>0){
+            const push=(SEP-od)*0.22;
+            e.x+=(ox/od)*push;
+            e.y+=(oy/od)*push*0.5;
+          }
+        });
+      }
+
+      if(e.isKnockedBack) {
+        // During knockback: block movement/attacking but health bars still update
+        e.healthBars.forEach((bar,i)=>{ bar.x=e.x-8+i*12; bar.y=e.y-e.displayHeight-8; });
+        return;
+      }
+
+      // ── Y PLANE: enemies always drift to exactly Claudio's Y ──
+      // No vertical offset — everyone fights on the same plane
+      e.y+=(this.hero.y - e.y)*0.12;
+      e.y=Phaser.Math.Clamp(e.y, this.heroMinY, this.heroMaxY);
+
+      // ── Flanking: each enemy holds a side of Claudio (left or right) ──
+      if(!e._flankSide){
+        const leftCount =alive.filter(o=>o!==e&&o._flankSide==='left').length;
+        const rightCount=alive.filter(o=>o!==e&&o._flankSide==='right').length;
+        e._flankSide = leftCount<=rightCount ? 'left' : 'right';
+      }
+
+      // Desired X: standoff distance on assigned side
+      const STANDOFF=230;
+      const sideX=e._flankSide==='left'
+        ? this.hero.x - STANDOFF
+        : this.hero.x + STANDOFF;
+
+      // X-only distance for attack triggering — Y is irrelevant since we're on same plane
+      const xDist=Math.abs(e.x - this.hero.x);
+
+      // Are we on the wrong side of hero right now?
+      const currentSign=Math.sign(e.x - this.hero.x); // -1=left, +1=right
+      const wantSign=e._flankSide==='left' ? -1 : 1;
+      const onWrongSide=(currentSign !== wantSign && xDist > 80);
+
+      // Speed boost when on wrong side — must get around hero
+      const flankBoost=onWrongSide ? 3.0 : 1.0;
+
+      if(e.type==='tg1'){
+        const ATTACK_X=280; // clearly larger than STANDOFF so he reliably enters attack range
+        if(!e.isAttacking){
+          // No dead zone — always press toward sideX to maintain pressure
+          const toSideX=sideX - e.x;
+          const spd=0.55*flankBoost;
+          e.x+=Math.sign(toSideX)*move*spd;
+          if(e.anims.currentAnim?.key!=='tg1-walk') e.play('tg1-walk',true);
+        }
+        // Attack trigger: X distance only, cooldown expired
+        if(!e.isAttacking && xDist<ATTACK_X && e.attackCooldown<=0){
+          e.isAttacking=true;
+          e.attackCooldown=Phaser.Math.Between(900,1600);
+          e.play('tg1-attack',true);
+          this.time.delayedCall(380,()=>{
+            if(!e.dead&&!this.heroInvincible&&Math.abs(this.hero.x-e.x)<290&&Math.abs(this.hero.y-e.y)<120)
+              this._damageHero();
+          });
+        }
+      } else { // tg2
+        const ATTACK_X=260;
+        if(!e.isAttacking){
+          const toSideX=sideX - e.x;
+          const spd=(xDist>350?0.80:0.56)*flankBoost;
+          // No dead zone — keep pressing
+          e.x+=Math.sign(toSideX)*move*spd;
+          if(xDist>350&&!e.isRunning){ e.isRunning=true; e.play('tg2-run',true); }
+          else if(xDist<=350&&e.isRunning){ e.isRunning=false; e.play('tg2-walk',true); }
+        }
+        if(!e.isAttacking && xDist<ATTACK_X && e.attackCooldown<=0){
+          e.isAttacking=true; e.isRunning=false;
+          e.attackCooldown=Phaser.Math.Between(1000,1800);
+          e.play('tg2-attack',true);
+          this.time.delayedCall(420,()=>{
+            if(!e.dead&&!this.heroInvincible&&Math.abs(this.hero.x-e.x)<270&&Math.abs(this.hero.y-e.y)<120)
+              this._damageHero();
+          });
+        }
+      }
+
+      // Health bar positions
+      e.healthBars.forEach((bar,i)=>{ bar.x=e.x-8+i*12; bar.y=e.y-e.displayHeight-8; });
+    });
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     BOSS PRE-FIGHT CUTSCENE
+  ══════════════════════════════════════════════════════════ */
+
+  // Clean white comic-book speech bubble above a world-space sprite.
+  _showCutsceneBubble(speaker, text, sprite, duration, onDone){
+    const pad=18, bubbleW=500, lineH=26;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/12);
+    const rawLines=text.split('\n');
+    let totalLines=0;
+    rawLines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
+    const nameH=30;
+    const bubbleH=pad*2+nameH+totalLines*lineH+8;
+
+    const reposition=()=>{
+      if(!sprite||!sprite.active) return;
+      const bx=sprite.x;
+      const by=sprite.y - sprite.displayHeight - 16;
+      bg.setPosition(bx,by);
+      nameT.setPosition(bx, by-bubbleH+pad);
+      bodyT.setPosition(bx, by-bubbleH+pad+nameH);
+    };
+
+    const bg=this.add.rectangle(0,0,bubbleW,bubbleH,0xffffff,0.97)
+      .setStrokeStyle(4,0x111111).setOrigin(0.5,1).setDepth(3200);
+    const nameT=this.add.text(0,0,speaker+':',{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'18px',
+      fontStyle:'bold', color:'#222266',
+      stroke:'#ffffff', strokeThickness:2
+    }).setOrigin(0.5,0).setDepth(3201);
+    const bodyT=this.add.text(0,0,text,{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'22px',
+      fontStyle:'bold', color:'#111111',
+      stroke:'#ffffff', strokeThickness:2,
+      wordWrap:{width:bubbleW-pad*2}, align:'center'
+    }).setOrigin(0.5,0).setDepth(3201);
+
+    const all=[bg,nameT,bodyT];
+    all.forEach(o=>o.setAlpha(0));
+    reposition();
+    this.tweens.add({targets:all,alpha:1,duration:200});
+
+    if(!this._cutBubbles) this._cutBubbles=[];
+    const entry={reposition};
+    this._cutBubbles.push(entry);
+
+    const tid=this.time.delayedCall(duration,()=>{
+      this.tweens.add({targets:all,alpha:0,duration:220,
+        onComplete:()=>{
+          all.forEach(o=>o.destroy());
+          this._cutBubbles=this._cutBubbles.filter(b=>b!==entry);
+          if(onDone) onDone();
+        }
+      });
+    });
+    entry.timer=tid;
+    return entry;
+  }
+
+  _triggerBossCutscene(){
+    const {width,height}=this.scale;
+    // Lock player input for the cutscene
+    this._cutsceneActive=true;
+    this._cutBubbles=[];
+
+    // Fade to black
+    this.cameras.main.fadeOut(700,0,0,0);
+    this.time.delayedCall(750,()=>{
+      // Reposition camera to a fixed spot (left side of world) for the cutscene
+      this.cameras.main.stopFollow();
+      this.cameras.main.setScroll(0,0);
+
+      // Claudio walks to left side
+      this.hero.setPosition(width*0.15, this.heroMaxY-4);
+      this.hero.setFlipX(false);
+      this.hero.play('cl-idle',true);
+
+      // ── DAUGHTER sprite ──
+      const daughterX=width*0.30, daughterY=this.heroMaxY-4;
+      const daughter=this.add.sprite(daughterX, daughterY,'d_idle')
+        .setScale(1.95).setOrigin(0.5,1).setDepth(49);
+      daughter.play('d-idle',true);
+      daughter.setFlipX(false); // faces right, watching boss walk in
+      this.daughter=daughter;
+
+      // ── BOSS walks in from right ──
+      const bossY=this.heroMaxY-4;
+      const boss=this.add.sprite(width+200, bossY,'boss_walk').setScale(4.2).setDepth(50).setOrigin(0.5,1);
+      boss.setFlipX(true);
+      if(this.anims.exists('boss-walk')) boss.play('boss-walk',true);
+      this._cutsceneBoss=boss;
+
+      // Fade back in
+      this.cameras.main.fadeIn(600,0,0,0);
+
+      // Boss walks to position — stops with clear gap from daughter
+      this.tweens.add({
+        targets:boss, x:width*0.50, duration:1400, ease:'Sine.Out',
+        onComplete:()=>{
+          if(this.anims.exists('boss-idle')) boss.play('boss-idle',true);
+          // Brief pause, then the abuse starts
+          this.time.delayedCall(600,()=>this._cutsceneStep1(boss, daughter));
+        }
+      });
+    });
+  }
+
+  // Step 1: Boss shouts at daughter
+  _cutsceneStep1(boss, daughter){
+    // Boss faces daughter (faces left = toward center-left)
+    boss.setFlipX(true);
+    // Boss aggression anim
+    if(this.anims.exists('boss-strong-attack')) boss.play('boss-strong-attack',true);
+    // Camera shake — abuse
+    this.cameras.main.shake(300,0.008);
+
+    this._showCutsceneBubble(
+      'THE FATHER',
+      "THAT'S ALL YOU HAVE TO SHOW ME\nFOR A DAY'S WORTH OF BEGGING?\nTHAT'S IT?!",
+      boss, 3200,
+      ()=>this._cutsceneStep2(boss, daughter)
+    );
+  }
+
+  // Step 2: Claudio speaks
+  _cutsceneStep2(boss, daughter){
+    if(this.anims.exists('boss-idle')) boss.play('boss-idle',true);
+    // Claudio faces right toward boss
+    this.hero.setFlipX(false);
+    this.heroFacing=1;
+    if(this.anims.exists('cl-idle')) this.hero.play('cl-idle',true);
+
+    this._showCutsceneBubble(
+      'CLAUDIO',
+      'LEAVE HER ALONE.',
+      this.hero, 2400,
+      ()=>this._cutsceneStep3(boss, daughter)
+    );
+  }
+
+  // Step 3: Boss turns and we go to fight
+  _cutsceneStep3(boss, daughter){
+    // Boss turns to face Claudio (faces left)
+    boss.setFlipX(true);
+    if(this.anims.exists('boss-quick-attack')) boss.play('boss-quick-attack',true);
+    this.cameras.main.shake(200,0.010);
+
+    this.time.delayedCall(500,()=>{
+      // Fade to black, start BossFightScene with daughter in tow
+      this.cameras.main.fadeOut(700,0,0,0);
+      this.time.delayedCall(750,()=>{
+        if(this.crowing&&this.crowing.isPlaying) this.crowing.stop();
+        this._cutsceneActive=false;
+        this.scene.start('BossFightScene',{withDaughter:true});
+      });
+    });
+  }
+}
+
+
+/* ══════════════════════════════════════════════════════════════════
+   BossFightScene — "The Father"
+   Runs after GodderDamScene wave clear.
+   Single-screen arena (no scrolling). Boss has 20 HP across 4 phases.
+   Phase 1 (20-15): walk + quick_attack
+   Phase 2 (15-10): adds strong_attack
+   Phase 3 (10-5):  adds dash_attack, faster
+   Phase 4 (5-0):   all attacks, max speed, rage mode
+══════════════════════════════════════════════════════════════════ */
+class BossFightScene extends Phaser.Scene {
+  constructor(){ super('BossFightScene'); }
+  init(data){ this.withDaughter = data && data.withDaughter ? true : false; }
+
+  preload(){
+    // Reuse GodderDam backgrounds and Claudio assets (already cached)
+    // Boss assets already loaded in GodderDamScene
+    // Just in case we jump here directly via dev menu, load everything
+    this.load.image('gd1','assets/bg/gd1.png');
+    this.load.image('gd2','assets/bg/gd2.png');
+    this.load.spritesheet('cl_idle',      'assets/claudio_gd/idle.png',      {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_walk',      'assets/claudio_gd/walk.png',      {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack1',   'assets/claudio_gd/attack1.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack2',   'assets/claudio_gd/attack2.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_attack3',   'assets/claudio_gd/attack3.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_knockback', 'assets/claudio_gd/knockback.png', {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_death',     'assets/claudio_gd/death.png',     {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('cl_special',   'assets/claudio_gd/special.png',   {frameWidth:124,frameHeight:160});
+    this.load.spritesheet('boss_idle',         'assets/boss/idle.png',         {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_walk',         'assets/boss/walk.png',         {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_quick_attack', 'assets/boss/quick_attack.png', {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_strong_attack','assets/boss/strong_attack.png',{frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_dash_attack',  'assets/boss/dash_attack.png',  {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_knockback',    'assets/boss/knockback.png',    {frameWidth:188,frameHeight:154});
+    this.load.spritesheet('boss_death',        'assets/boss/death.png',        {frameWidth:188,frameHeight:154});
+    // Daughter
+    this.load.spritesheet('d_idle',       'assets/daughter/idle-.png',          {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_walk',       'assets/daughter/walk.png',           {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_beg_idle',   'assets/daughter/begging_idle.png',   {frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_standup',    'assets/daughter/stand_up_happy-.png',{frameWidth:101,frameHeight:164});
+    this.load.spritesheet('d_stopwalk',   'assets/daughter/stop_walk_beg.png',  {frameWidth:101,frameHeight:164});
+    this.load.audio('crowing','assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3');
+    if(!this.textures.exists('combo3x')) this.load.spritesheet('combo3x','assets/combo/combo3x.png',{frameWidth:128,frameHeight:128});
+    if(!this.textures.exists('combo6x')) this.load.spritesheet('combo6x','assets/combo/combo6x.png',{frameWidth:128,frameHeight:128});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.gameOver=false;
+    this.bossDefeated=false;
+    this._dialogueActive=false;
+    this.speed=300;
+
+    // ── Floor / movement bounds ──
+    this.heroMinY=height*0.848; this.heroMaxY=height*0.923;
+    this.heroMinX=80;          this.heroMaxX=width-80;
+    this.bossMinY=height*0.848; this.bossMaxY=height*0.923;
+
+    /* ── Background: GD panels tiled to fill screen width — match GodderDam formula ── */
+    const bgKeys=['gd1','gd2'];
+    const bgW_src=1536, bgH_src=1024, artTop=288, artBot=708;
+    const artH=artBot-artTop;
+    const bgScale=height/artH;
+    const scaledW=bgW_src*bgScale;
+    const scaledH=bgH_src*bgScale;
+    const bgY=-(artTop*bgScale);
+    let bx=0;
+    while(bx<width+scaledW){
+      const key=bgKeys[Math.floor(bx/scaledW)%bgKeys.length];
+      this.add.image(bx,bgY,key).setOrigin(0,0).setDisplaySize(scaledW,scaledH).setDepth(0);
+      bx+=scaledW;
+    }
+    // Dark arena vignette
+    this.add.rectangle(0,0,width*4,height,0x000000,0.22).setOrigin(0,0).setDepth(1);
+
+    /* ── Register anims (guard against duplicates) ── */
+    const A=this.anims;
+    const _c=(cfg)=>{ if(!A.exists(cfg.key)) A.create(cfg); };
+    _c({key:'cl-idle',      frames:A.generateFrameNumbers('cl_idle',      {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'cl-walk',      frames:A.generateFrameNumbers('cl_walk',      {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'cl-attack1',   frames:A.generateFrameNumbers('cl_attack1',   {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'cl-attack2',   frames:A.generateFrameNumbers('cl_attack2',   {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'cl-attack3',   frames:A.generateFrameNumbers('cl_attack3',   {start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'cl-knockback', frames:A.generateFrameNumbers('cl_knockback', {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'cl-death',     frames:A.generateFrameNumbers('cl_death',     {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'cl-special',   frames:A.generateFrameNumbers('cl_special',   {start:0,end:15}), frameRate:12, repeat:0});
+    _c({key:'boss-idle',         frames:A.generateFrameNumbers('boss_idle',         {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'boss-walk',         frames:A.generateFrameNumbers('boss_walk',         {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'boss-quick-attack', frames:A.generateFrameNumbers('boss_quick_attack', {start:0,end:15}), frameRate:40, repeat:0});
+    _c({key:'boss-strong-attack',frames:A.generateFrameNumbers('boss_strong_attack',{start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'boss-dash-attack',  frames:A.generateFrameNumbers('boss_dash_attack',  {start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'boss-knockback',    frames:A.generateFrameNumbers('boss_knockback',    {start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'boss-death',        frames:A.generateFrameNumbers('boss_death',        {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'d-idle',            frames:A.generateFrameNumbers('d_idle',            {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'d-walk',            frames:A.generateFrameNumbers('d_walk',            {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'d-beg-idle',        frames:A.generateFrameNumbers('d_beg_idle',        {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'d-standup',         frames:A.generateFrameNumbers('d_standup',         {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'d-stopwalk',        frames:A.generateFrameNumbers('d_stopwalk',        {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'combo-3x', frames:A.generateFrameNumbers('combo3x',{start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'combo-6x', frames:A.generateFrameNumbers('combo6x',{start:0,end:15}), frameRate:18, repeat:0});
+
+    /* ── Music ── */
+    this.sound.getAll().forEach(s=>{ if(s.isPlaying) s.stop(); });
+    this.crowing=this.sound.add('crowing',{loop:true,volume:0});
+    this.crowing.play();
+    this.tweens.add({targets:this.crowing, volume:0.8, duration:1500});
+
+    /* ── CLAUDIO ── */
+    const spawnY=this.heroMaxY-4;
+    this.hero=this.add.sprite(width*0.18, spawnY,'cl_idle')
+      .setScale(3.75).setDepth(50).setOrigin(0.5,1);
+    this.hero.play('cl-idle');
+    this.heroFacing=1;
+    this.isAttacking=false;
+    this.isKnockedBack=false;
+    this.heroHealth=15;
+    this.heroInvincible=false;
+    this._invincFlash=null; this._invincTimer=null;
+    this.heroPower=0;
+    this.isSpecial=false;
+    this._strStep=0; this._strBuffered=false;
+    this._strTimer=null;
+
+    // Claudio anim listeners
+    const _onJabCross=()=>{
+      this.isAttacking=false;
+      if(this._strBuffered){ this._strBuffered=false; this._fireStringStep(); }
+      else { this._strStep=0; if(!this.gameOver) this.hero.play('cl-idle',true); }
+    };
+    this.hero.on('animationcomplete-cl-attack1', _onJabCross);
+    this.hero.on('animationcomplete-cl-attack2', _onJabCross);
+    this.hero.on('animationcomplete-cl-attack3',()=>{
+      this.isAttacking=false; this._strStep=0; this._strBuffered=false;
+      if(this._strTimer){ this._strTimer.remove(); this._strTimer=null; }
+      if(!this.gameOver) this.hero.play('cl-idle',true);
+    });
+    this.hero.on('animationcomplete-cl-knockback',()=>{
+      this.isKnockedBack=false;
+      if(!this.gameOver) this.hero.play('cl-idle',true);
+    });
+    this.hero.on('animationcomplete-cl-special',()=>{
+      this.isAttacking=false; this.isSpecial=false;
+      if(!this.gameOver) this.hero.play('cl-idle',true);
+    });
+
+    /* ── BOSS ── */
+    this.bossHP=30; this.bossMaxHP=30;
+    this.bossPhase=1;
+    this.bossAttacking=false;
+    this.bossKnockedBack=false;
+    this.bossCooldown=0;
+    this.bossInvincible=false; // brief stagger invincibility
+    this._bossKbTween=null;
+
+    this.boss=this.add.sprite(width*0.78, spawnY,'boss_idle')
+      .setScale(4.5).setDepth(50).setOrigin(0.5,1);
+    this.boss.play('boss-idle');
+    this.boss.setFlipX(true); // faces left toward Claudio
+
+    this.boss.on('animationcomplete-boss-quick-attack', ()=>{ this.bossAttacking=false; if(!this.bossDefeated) this.boss.play('boss-idle',true); });
+    this.boss.on('animationcomplete-boss-strong-attack',()=>{ this.bossAttacking=false; if(!this.bossDefeated) this.boss.play('boss-idle',true); });
+    this.boss.on('animationcomplete-boss-dash-attack',  ()=>{ this.bossAttacking=false; if(!this.bossDefeated) this.boss.play('boss-idle',true); });
+    this.boss.on('animationcomplete-boss-knockback',    ()=>{ this.bossKnockedBack=false; if(!this.bossDefeated) this.boss.play('boss-idle',true); });
+
+    /* ── UI: Claudio HP ── */
+    this.add.text(20,14,'CLAUDIO',{fontFamily:'Arial Black',fontSize:'28px',color:'#ffffff',stroke:'#000',strokeThickness:4}).setScrollFactor(0).setDepth(1000);
+    this.add.text(20,50,'HP',{fontFamily:'Arial',fontSize:'14px',color:'#88ff88'}).setScrollFactor(0).setDepth(1000);
+    this.heroHealthBars=[];
+    const BAR_W=22,BAR_H=12,BAR_GAP=3;
+    for(let i=0;i<15;i++) this.heroHealthBars.push(
+      this.add.rectangle(54+i*(BAR_W+BAR_GAP),57,BAR_W,BAR_H,0x00dd00).setScrollFactor(0).setDepth(1000)
+    );
+    this.add.text(20,80,'PWR',{fontFamily:'Arial',fontSize:'14px',color:'#44ffee'}).setScrollFactor(0).setDepth(1000);
+    this.heroPowerBars=[];
+    for(let i=0;i<10;i++) this.heroPowerBars.push(
+      this.add.rectangle(54+i*(BAR_W+BAR_GAP),87,BAR_W,BAR_H,0x004444).setScrollFactor(0).setDepth(1000)
+    );
+
+    /* ── UI: Boss HP bar (big, top-center) ── */
+    this.add.text(width/2,18,'— THE FATHER —',{
+      fontFamily:'Arial Black',fontSize:'24px',color:'#ff4400',stroke:'#000',strokeThickness:4
+    }).setOrigin(0.5,0).setScrollFactor(0).setDepth(1000);
+    const bossBarBg=this.add.rectangle(width/2,52,600,20,0x330000).setScrollFactor(0).setDepth(1000);
+    this.bossHPBar=this.add.rectangle(width/2,52,600,20,0xff2200).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+    this.bossHPText=this.add.text(width/2,52,'30 / 30',{
+      fontFamily:'Arial',fontSize:'13px',color:'#ffcccc'
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1002);
+
+    /* ── Score ── */
+    this._scoreLabel=this.add.text(width-28,60,String(window.SCORE||0).padStart(7,'0'),{
+      fontFamily:'"Arial Black",Arial',fontSize:'44px',color:'#ffee00',
+      stroke:'#ffffff',strokeThickness:5,
+      shadow:{offsetX:0,offsetY:0,color:'#ff8800',blur:14,fill:true}
+    }).setOrigin(1,0).setScrollFactor(0).setDepth(5000);
+    this._scoreSwelling=false;
+    this._combo=0; this._comboTimer=null; this._comboSprite=null;
+
+    /* ── Input ── */
+    this.cursors=this.input.keyboard.createCursorKeys();
+    this.attackKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
+    this.specialKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.G);
+    this.game.canvas.focus();
+    window.initMobileControls(this);
+
+    /* ── Intro: boss walks in, brief pause, fight! ── */
+    if(this.withDaughter){
+      // Coming straight from the cutscene — skip walk-in, just start idle
+      this.boss.x=width*0.78;
+      this.boss.play('boss-idle',true);
+      this._bossIntro=false;
+      const ft=this.add.text(width/2,height*0.38,'FIGHT!',{
+        fontFamily:'Arial Black',fontSize:'120px',color:'#ffdd00',
+        stroke:'#000000',strokeThickness:10
+      }).setOrigin(0.5).setScrollFactor(0).setDepth(2000).setScale(0.3);
+      this.tweens.add({targets:ft,scaleX:1,scaleY:1,duration:200,ease:'Back.Out'});
+      this.tweens.add({targets:ft,alpha:0,y:ft.y-60,duration:800,delay:600,onComplete:()=>ft.destroy()});
+    } else {
+      this.boss.x=width+200;
+      this.boss.play('boss-walk',true);
+      this._bossIntro=true;
+      this.tweens.add({
+        targets:this.boss, x:width*0.78, duration:1800, ease:'Sine.Out',
+        onComplete:()=>{
+          this.boss.play('boss-idle',true);
+          this._bossIntro=false;
+          // "FIGHT!" announce
+          const ft=this.add.text(width/2,height*0.38,'FIGHT!',{
+            fontFamily:'Arial Black',fontSize:'120px',color:'#ffdd00',
+            stroke:'#000000',strokeThickness:10
+          }).setOrigin(0.5).setScrollFactor(0).setDepth(2000).setScale(0.3);
+          this.tweens.add({targets:ft,scaleX:1,scaleY:1,duration:200,ease:'Back.Out'});
+          this.tweens.add({targets:ft,alpha:0,y:ft.y-60,duration:800,delay:600,onComplete:()=>ft.destroy()});
+        }
+      });
+    }
+
+    /* ── Daughter — stands right side, plays idle during fight ── */
+    if(this.withDaughter){
+      const daughterX=width*0.72, daughterY=this.heroMaxY-4;
+      this._daughter=this.add.sprite(daughterX, daughterY,'d_idle')
+        .setScale(1.95).setOrigin(0.5,1).setDepth(48);
+      this._daughter.play('d-idle',true);
+      this._daughter.setFlipX(true); // faces left toward the fight
+    } else {
+      this._daughter=null;
+    }
+  }
+
+  /* ── Boss HP update ── */
+  _updateBossHP(){
+    const pct=this.bossHP/this.bossMaxHP;
+    this.bossHPBar.setDisplaySize(600*pct,20);
+    this.bossHPText.setText(`${Math.max(0,this.bossHP)} / ${this.bossMaxHP}`);
+    // Phase transitions
+    const newPhase=this.bossHP>22?1:this.bossHP>14?2:this.bossHP>7?3:4;
+    if(newPhase>this.bossPhase){
+      this.bossPhase=newPhase;
+      this.cameras.main.shake(300,0.02);
+    }
+  }
+
+  /* ── Boss takes a hit ── */
+  _damageBoss(){
+    if(this.bossInvincible||this.bossDefeated) return;
+    const dmg=(this._strStep===3)?2:1;
+    this.bossHP=Math.max(0,this.bossHP-dmg);
+    this._updateBossHP();
+
+    // Hit flash
+    this.boss.setTint(0xff6633);
+    this.time.delayedCall(80,()=>{ if(this.boss.active) this.boss.clearTint(); });
+    this.cameras.main.shake(80,0.012);
+    this._spawnHitSparks(this.boss.x-this.heroFacing*30, this.boss.y-80);
+
+    // Brief stagger invincibility (shorter = easier to land combos)
+    this.bossInvincible=true;
+    this.time.delayedCall(80,()=>{ this.bossInvincible=false; });
+
+    // Hitstop Claudio
+    this.hero.anims.pause();
+    this.time.delayedCall(60,()=>{ if(!this.gameOver) this.hero.anims.resume(); });
+
+    // Power meter
+    this.heroPower=Math.min(this.heroPower+1,10);
+    this.heroPowerBars.forEach((b,i)=>b.setFillStyle(i<this.heroPower?0x00ffdd:0x004444));
+
+    if(this.bossHP<=0){
+      this._killBoss(); return;
+    }
+
+    // Knockback stagger (finisher = big, jab/cross = medium)
+    const isFinisher=(this._strStep===3);
+    this.bossKnockedBack=true;
+    this.bossAttacking=false;
+    if(this._bossKbTween){ this._bossKbTween.stop(); this._bossKbTween=null; }
+
+    if(isFinisher){
+      this._updateComboDisplay(true);
+      this.boss.play('boss-knockback',true);
+      const kbDest=this.boss.x+this.heroFacing*420;
+      this._bossKbTween=this.tweens.add({
+        targets:this.boss, x:Phaser.Math.Clamp(kbDest,120,this.scale.width-120),
+        duration:380, ease:'Quad.Out',
+        onComplete:()=>{ this._bossKbTween=null; }
+      });
+    } else {
+      this._updateComboDisplay(false);
+      // Jab/cross — noticeable push
+      const stagger=this.heroFacing*140;
+      this._bossKbTween=this.tweens.add({
+        targets:this.boss, x:Phaser.Math.Clamp(this.boss.x+stagger,120,this.scale.width-120),
+        duration:120, ease:'Cubic.Out',
+        onComplete:()=>{ this._bossKbTween=null; this.bossKnockedBack=false; }
+      });
+    }
+  }
+
+  /* ── Kill boss ── */
+  _killBoss(){
+    this.bossDefeated=true;
+    this.bossAttacking=false;
+    this.bossKnockedBack=true;
+    if(this._bossKbTween){ this._bossKbTween.stop(); this._bossKbTween=null; }
+    this.cameras.main.shake(400,0.03);
+    this._showAnnounce('FATHER DEFEATED!','#ffdd00');
+    // Big launch
+    const launchX=Phaser.Math.Clamp(this.boss.x+this.heroFacing*250,100,this.scale.width-100);
+    this.tweens.add({targets:this.boss,x:launchX,duration:350,ease:'Quad.Out'});
+    this.time.delayedCall(200,()=>{
+      if(!this.boss.active) return;
+      this.boss.play('boss-death',true);
+      this.boss.once('animationcomplete-boss-death',()=>{
+        this.boss.anims.stop(); this.boss.setFrame(15);
+        this.boss.setDepth(1); // sink to bottom of character stack
+        this._addScore(5000,this.boss.x,this.boss.y-80);
+        if(typeof gtag!=='undefined') gtag('event','level_complete',{level:'boss',score:window.SCORE||0});
+
+        // ── Daughter: idle briefly, then walks to Claudio ──
+        if(this._daughter && this._daughter.active){
+          const d=this._daughter;
+          const {width}=this.scale;
+          this._dialogueActive=true;
+
+          // Pre-position hero while closeup plays
+          this.tweens.add({targets:this.hero, x:width*0.30, duration:600, ease:'Sine.Out',
+            onComplete:()=>{ this.hero.play('cl-idle',true); this.hero.setFlipX(false); this.heroFacing=1; }
+          });
+
+          // ── Callback fired when BossCloseupScene finishes ──
+          window._bossCloseupDone=()=>{
+            this.scene.bringToTop('BossFightScene');
+            // Daughter walks in toward Claudio
+            d.play('d-idle',true);
+            d.setFlipX(true);
+            this.time.delayedCall(400,()=>{
+              const walkTarget=this.hero.x+160;
+              d.play('d-walk',true);
+              d.setFlipX(true);
+              const walkSpeed=150;
+              const walkUpdate=(_,delta)=>{
+                if(!d.active) return;
+                const dist=walkTarget-d.x;
+                if(Math.abs(dist)<6){
+                  d.x=walkTarget;
+                  this.events.off('update',walkUpdate);
+                  d.play('d-stopwalk',true);
+                  d.setFlipX(true);
+                  d.once('animationcomplete-d-stopwalk',()=>{
+                    d.play('d-beg-idle',true);
+                    d.setFlipX(true);
+                    this.hero.setFlipX(false);
+                    this.hero.play('cl-idle',true);
+                    d.setDepth(60);
+                    this.time.delayedCall(300,()=>this._runEndDialogue(d));
+                  });
+                } else {
+                  d.x+=Math.sign(dist)*walkSpeed*(delta/1000);
+                }
+              };
+              this.events.on('update',walkUpdate);
+            });
+          };
+
+          // ── Launch the closeup scene on top ──
+          this.time.delayedCall(600,()=>{
+            this.scene.launch('BossCloseupScene');
+            this.scene.bringToTop('BossCloseupScene');
+          });
+
+        } else {
+          // No daughter — go straight to closeup, then Level4
+          this.time.delayedCall(2500,()=>{
+            this.cameras.main.fadeOut(800,0,0,0);
+            this.time.delayedCall(850,()=>{
+              window._bossCloseupDone=null;
+              this.scene.start('BossCloseupScene');
+            });
+          });
+        }
+      });
+    });
+  }
+
+
+  // ── Post-boss dialogue: player taps NEXT to advance ──
+  // Lines: [speaker, text, beforeLine_fn]
+  // beforeLine_fn is called before the bubble shows (for anim changes)
+  _runEndDialogue(d){
+    const lines=[
+      // idx 0: daughter begs
+      {speaker:'DAUGHTER', text:"PLEASE DON'T KILL HIM!\nDON'T KILL MY DADDY!",
+        before:()=>{
+          d.play('d-beg-idle',true); d.setFlipX(true);
+          this.hero.play('cl-idle',true); this.hero.setFlipX(false);
+        }
+      },
+      // idx 1: Claudio threatens memory erase
+      {speaker:'CLAUDIO', text:"Do I need to erase your memory\nof this moment...?\nBecause no one can know\nwhat you've seen--",
+        before:()=>{
+          d.play('d-beg-idle',true); d.setFlipX(true);
+          this.hero.play('cl-idle',true); this.hero.setFlipX(false);
+        }
+      },
+      // idx 2: daughter asks him not to — after this she stands up
+      {speaker:'DAUGHTER', text:"Please don't. I...\nI want to remember it...\nand give thanks to you\nevery night before I go to sleep.",
+        before:()=>{
+          d.play('d-beg-idle',true); d.setFlipX(true);
+          this.hero.play('cl-idle',true); this.hero.setFlipX(false);
+        }
+      },
+      // idx 3: daughter calls him angel — she stands up here
+      {speaker:'DAUGHTER', text:"I never met an angel before.",
+        before:()=>{
+          d.play('d-standup',true); d.setFlipX(true);
+          this.hero.play('cl-idle',true); this.hero.setFlipX(false);
+        }
+      },
+      // idx 4: Claudio — no angels
+      {speaker:'CLAUDIO', text:"You still haven't.\nThere are no angels.\nNot anymore.",
+        before:()=>{
+          // daughter now standing idle after standup
+          if(d.anims.currentAnim?.key!=='d-idle'&&d.anims.currentAnim?.key!=='d-standup'){
+            d.play('d-idle',true); d.setFlipX(true);
+          }
+          this.hero.play('cl-idle',true); this.hero.setFlipX(false);
+        }
+      },
+    ];
+
+    const showLine=(idx)=>{
+      if(idx>=lines.length){
+        window.hideNextButton();
+        // Nuclear stop — kill every sound, then start Level4 which will start crowing
+        this.sound.getAll().forEach(s=>s.stop());
+        this.time.delayedCall(700,()=>{
+          this.cameras.main.fadeOut(900,0,0,0);
+          this.time.delayedCall(950,()=>{
+            this.scene.start('Level4CutsceneScene');
+          });
+        });
+        return;
+      }
+      const {speaker,text,before}=lines[idx];
+      if(before) before();
+      const sprite=(speaker==='DAUGHTER')?d:this.hero;
+      this._showDaughterBubble(speaker, text, sprite, ()=>showLine(idx+1));
+    };
+    showLine(0);
+  }
+
+  // Clean white comic-book bubble above the speaking character. NEXT button advances.
+  _showDaughterBubble(speaker, text, sprite, onDone){
+    const pad=18, bubbleW=520, lineH=28;
+    const charsPerLine=Math.floor((bubbleW-pad*2)/12);
+    const rawLines=text.split('\n');
+    let totalLines=0;
+    rawLines.forEach(l=>{ totalLines+=Math.max(1,Math.ceil(l.length/charsPerLine)); });
+    const nameH=30;
+    const bubbleH=pad*2+nameH+totalLines*lineH+8;
+
+    // Bubble pinned to upper portion of screen — never covers characters in lower half
+    const {width, height}=this.scale;
+    // X tracks the speaker horizontally; Y is fixed in upper zone
+    const getBubblePos=()=>{
+      const bx=Phaser.Math.Clamp(sprite.x, bubbleW/2+10, width-bubbleW/2-10);
+      const by=height*0.38; // fixed Y — well above characters on the floor
+      return {bx,by};
+    };
+    const {bx,by}=getBubblePos();
+
+    const bg=this.add.rectangle(bx,by,bubbleW,bubbleH,0xffffff,0.97)
+      .setStrokeStyle(4,0x111111).setOrigin(0.5,1).setDepth(3200);
+    const nameT=this.add.text(bx, by-bubbleH+pad, speaker+':',{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'18px',
+      fontStyle:'bold', color:'#222266',
+      stroke:'#ffffff', strokeThickness:2
+    }).setOrigin(0.5,0).setDepth(3201);
+    const bodyT=this.add.text(bx, by-bubbleH+pad+nameH, text,{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'22px',
+      fontStyle:'bold', color:'#111111',
+      stroke:'#ffffff', strokeThickness:2,
+      wordWrap:{width:bubbleW-pad*2}, align:'center'
+    }).setOrigin(0.5,0).setDepth(3201);
+
+    const all=[bg,nameT,bodyT];
+    all.forEach(o=>o.setAlpha(0));
+    this.tweens.add({targets:all, alpha:1, duration:200});
+
+    // Reposition each frame in case sprite moves
+    const updFn=()=>{
+      if(!sprite||!sprite.active) return;
+      const {bx:nx,by:ny}=getBubblePos();
+      bg.setPosition(nx,ny);
+      nameT.setPosition(nx, ny-bubbleH+pad);
+      bodyT.setPosition(nx, ny-bubbleH+pad+nameH);
+    };
+    this.events.on('update',updFn);
+
+    // NEXT button advances dialogue
+    window.showNextButton(this, ()=>{
+      window.hideNextButton();
+      this.events.off('update',updFn);
+      this.tweens.add({targets:all, alpha:0, duration:180,
+        onComplete:()=>{ all.forEach(o=>o.destroy()); if(onDone) onDone(); }
+      });
+    });
+  }
+
+  /* ── Check if Claudio's punch hits boss ── */
+  _checkBossHit(){
+    if(!this.isAttacking||this.bossDefeated) return;
+    const dx=(this.boss.x-this.hero.x)*this.heroFacing;
+    const dy=Math.abs(this.boss.y-this.hero.y);
+    const RANGE=420, VERT=220;
+    if(dx>0&&dx<RANGE&&dy<VERT&&!this._hitBossThisSwing){
+      this._hitBossThisSwing=true;
+      this._damageBoss();
+    }
+  }
+
+  /* ── Damage Claudio ── */
+  _damageHero(amount=1){
+    if(this.heroInvincible||this.gameOver) return;
+    this.heroHealth=Math.max(0,this.heroHealth-amount);
+    for(let i=this.heroHealthBars.length-1;i>=0&&amount>0;i--){
+      if(this.heroHealthBars[i].fillColor!==0x333333){
+        this.heroHealthBars[i].setFillStyle(0x333333); amount--;
+      }
+    }
+    if(this.heroHealth<=0){ this._triggerDeath(); return; }
+    this.isKnockedBack=true; this.isAttacking=false; this.isSpecial=false; this.heroInvincible=true;
+    this.hero.play('cl-knockback',true);
+    const kbDir=this.heroFacing*-1;
+    this.tweens.add({targets:this.hero,x:Phaser.Math.Clamp(this.hero.x+kbDir*60,this.heroMinX,this.heroMaxX),duration:200,ease:'Sine.Out'});
+    if(this._invincFlash) this._invincFlash.stop();
+    this._invincFlash=this.tweens.add({targets:this.hero,alpha:0.25,duration:120,ease:'Linear',yoyo:true,repeat:-1});
+    if(this._invincTimer) this._invincTimer.remove();
+    this._invincTimer=this.time.delayedCall(2000,()=>{
+      this.heroInvincible=false;
+      if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+      this.hero.setAlpha(1);
+    });
+  }
+
+  _triggerDeath(){
+    if(this.gameOver) return;
+    this.gameOver=true;
+    if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+    this.hero.setAlpha(1);
+    this.hero.play('cl-death',true);
+    this.cameras.main.shake(700,0.025);
+    if(typeof gtag!=='undefined') gtag('event','game_over',{level:'boss',score:window.SCORE||0});
+    this.time.delayedCall(1200,()=>{
+      const {width,height}=this.scale;
+      this.add.rectangle(width/2,height/2,width,height,0x000000,0.72).setScrollFactor(0).setDepth(2000);
+      this.add.text(width/2,height/2-70,'GAME OVER',{fontFamily:'Arial Black',fontSize:'96px',color:'#ff2222',stroke:'#000000',strokeThickness:8}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+      this.add.text(width/2,height/2+50,'Click to try again',{fontFamily:'Arial',fontSize:'36px',color:'#ffffff'}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+      this.time.delayedCall(900,()=>this.input.once('pointerdown',()=>{
+        if(this.crowing&&this.crowing.isPlaying) this.crowing.stop();
+        this.scene.start('BossFightScene');
+      }));
+    });
+  }
+
+  /* ── Attack string (same as GodderDam) ── */
+  _fireStringStep(){
+    if(this._strStep>=3) this._strStep=0;
+    this._strStep++;
+    this.isAttacking=true;
+    this._strBuffered=false;
+    this._hitBossThisSwing=false;
+    if(this._strTimer) this._strTimer.remove();
+    this._strTimer=this.time.delayedCall(500,()=>{ this._strStep=0; this._strTimer=null; });
+    if(this._strStep===3){
+      this.hero.play('cl-attack3',true);
+      this.time.delayedCall(150,()=>this._checkBossHit());
+      this.time.delayedCall(320,()=>{ this._hitBossThisSwing=false; this._checkBossHit(); });
+    } else {
+      const animKey=this._strStep===1?'cl-attack1':'cl-attack2';
+      this.hero.play(animKey,true);
+      this.time.delayedCall(140,()=>this._checkBossHit());
+      this.time.delayedCall(400,()=>{
+        if(this._strBuffered&&this.isAttacking){
+          this._strBuffered=false;
+          this.hero.anims.stop();
+          this.isAttacking=false;
+          this._fireStringStep();
+        }
+      });
+    }
+  }
+
+  /* ── Sparks, score, combo, announce (shared helpers) ── */
+  _spawnHitSparks(x,y){
+    const gfx=this.add.graphics().setDepth(300);
+    const sparks=[];
+    for(let i=0;i<8;i++){
+      const angle=Math.random()*Math.PI*2;
+      const spd=Phaser.Math.Between(80,160);
+      sparks.push({vx:Math.cos(angle)*spd,vy:Math.sin(angle)*spd-60,x,y});
+    }
+    let elapsed=0;
+    const upd=(_,delta)=>{
+      elapsed+=delta;
+      const t=elapsed/250;
+      gfx.clear();
+      sparks.forEach(s=>{
+        s.x+=s.vx*(delta/1000); s.y+=s.vy*(delta/1000); s.vy+=300*(delta/1000);
+        const a=(1-t)*0.9;
+        if(a>0){ gfx.fillStyle(t<0.4?0xffffff:0xffcc00,a); gfx.fillCircle(s.x,s.y,4*(1-t*0.5)); }
+      });
+      if(elapsed>=250){ this.events.off('update',upd); gfx.destroy(); }
+    };
+    this.events.on('update',upd);
+  }
+
+  _addScore(pts,x,y){
+    window.SCORE=(window.SCORE||0)+pts;
+    this._scoreLabel.setText(String(window.SCORE).padStart(7,'0'));
+    if(!this._scoreSwelling){
+      this._scoreSwelling=true;
+      this.tweens.add({targets:this._scoreLabel,scaleX:1.3,scaleY:1.3,duration:100,ease:'Sine.Out',yoyo:true,
+        onComplete:()=>{ this._scoreSwelling=false; this._scoreLabel.setScale(1); }});
+    }
+    const lbl=this.add.text(x,y,'+'+pts,{fontFamily:'"Arial Black"',fontSize:'28px',color:'#ffdd00',stroke:'#000',strokeThickness:4}).setOrigin(0.5,1).setDepth(4000);
+    this.tweens.add({targets:lbl,y:lbl.y-60,alpha:0,duration:900,onComplete:()=>lbl.destroy()});
+  }
+
+  _updateComboDisplay(isFinisher=false){
+    if(!isFinisher) return;
+    this._combo++;
+    if(this._comboTimer) this._comboTimer.remove();
+    this._comboTimer=this.time.delayedCall(3000,()=>{ this._combo=0; });
+    const trigger=this._combo%2===0?'combo-6x':'combo-3x';
+    if(this._comboSprite&&this._comboSprite.active){ this._comboSprite.destroy(); this._comboSprite=null; }
+    const sx=this.hero.x, sy=this.hero.y - this.hero.displayHeight - 20;
+    const tex=trigger==='combo-3x'?'combo3x':'combo6x';
+    const spr=this.add.sprite(sx,sy,tex).setScale(2.8).setDepth(1600).setOrigin(0.5,1).setAlpha(0);
+    spr.play(trigger);
+    this._comboSprite=spr;
+    this.tweens.add({targets:spr,alpha:1,duration:60});
+    spr.once('animationcomplete',()=>{
+      if(!spr.active) return;
+      this.tweens.add({targets:spr,alpha:0,duration:250,onComplete:()=>{ if(spr.active) spr.destroy(); if(this._comboSprite===spr) this._comboSprite=null; }});
+    });
+  }
+
+  _showAnnounce(msg,color='#ffdd44'){
+    const {width,height}=this.scale;
+    const t=this.add.text(width/2,height*0.30,msg,{
+      fontFamily:'Arial Black',fontSize:'52px',color,stroke:'#000000',strokeThickness:6
+    }).setOrigin(0.5).setScrollFactor(0).setDepth(1500);
+    this.tweens.add({targets:t,alpha:0,y:t.y-60,duration:1800,onComplete:()=>t.destroy()});
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     UPDATE
+  ══════════════════════════════════════════════════════════ */
+  update(time,delta){
+    if(this.gameOver||this.bossDefeated||this._bossIntro) return;
+    const move=(this.speed*delta)/1000;
+
+    /* ── Input ── */
+    const _L=this.cursors.left.isDown  ||(window.IS_MOBILE&&window.VPAD.left);
+    const _R=this.cursors.right.isDown ||(window.IS_MOBILE&&window.VPAD.right);
+    const _U=this.cursors.up.isDown    ||(window.IS_MOBILE&&window.VPAD.up);
+    const _D=this.cursors.down.isDown  ||(window.IS_MOBILE&&window.VPAD.down);
+    const _mobileEvt=window.IS_MOBILE?(window.VPAD_QUEUE[0]||null):null;
+    const _atkNow=window.IS_MOBILE?(_mobileEvt==='attack'||_mobileEvt==='two_punch'?(window.VPAD_QUEUE.shift(),true):false):Phaser.Input.Keyboard.JustDown(this.attackKey);
+
+    /* ── Claudio movement ── */
+    let moving=false;
+    if(!this.isAttacking&&!this.isKnockedBack){
+      if(_L){ this.hero.x-=move; this.heroFacing=-1; this.hero.setFlipX(true);  moving=true; }
+      else if(_R){ this.hero.x+=move; this.heroFacing=1;  this.hero.setFlipX(false); moving=true; }
+      if(_U){ this.hero.y-=move*0.55; moving=true; }
+      else if(_D){ this.hero.y+=move*0.55; moving=true; }
+      this.hero.x=Phaser.Math.Clamp(this.hero.x,this.heroMinX,this.heroMaxX);
+      this.hero.y=Phaser.Math.Clamp(this.hero.y,this.heroMinY,this.heroMaxY);
+      if(moving){ if(this.hero.anims.currentAnim?.key!=='cl-walk') this.hero.play('cl-walk',true); }
+      else { if(this.hero.anims.currentAnim?.key!=='cl-idle') this.hero.play('cl-idle',true); }
+    }
+
+    /* ── Attack input ── */
+    if(_atkNow&&!this.isKnockedBack&&!this.isSpecial){
+      if(!this.isAttacking) this._fireStringStep();
+      else this._strBuffered=true;
+    }
+
+    /* ── Special ── */
+    const _specNow=window.IS_MOBILE
+      ?(window.VPAD_QUEUE[0]==='power'?(window.VPAD_QUEUE.shift(),true):false)
+      :Phaser.Input.Keyboard.JustDown(this.specialKey);
+    if(_specNow&&this.heroPower>=10&&!this.isAttacking&&!this.isKnockedBack&&!this.isSpecial){
+      this.isSpecial=true; this.isAttacking=true;
+      this.hero.play('cl-special',true);
+      this.heroPower=0;
+      this.heroPowerBars.forEach(b=>b.setFillStyle(0x004444));
+      // Safety: force-clear flags if animcomplete misfires
+      this.time.delayedCall(1600,()=>{ this.isSpecial=false; this.isAttacking=false; });
+      // Special does 5 damage to boss
+      this.time.delayedCall(400,()=>{
+        if(this.bossDefeated) return;
+        this.bossInvincible=false;
+        for(let i=0;i<5;i++) this.time.delayedCall(i*80,()=>this._damageBoss());
+        this.cameras.main.shake(500,0.025);
+      });
+    }
+
+    /* ── Boss AI ── */
+    if(!this.bossKnockedBack&&!this.bossDefeated){
+      this.boss.setFlipX(this.boss.x>this.hero.x);
+      this.bossCooldown-=delta;
+
+      const bdx=this.hero.x-this.boss.x;
+      const bdy=this.hero.y-this.boss.y;
+      const bdist=Math.hypot(bdx,bdy);
+
+      // Phase-based speed multiplier
+      const spd=[0,0.52,0.68,0.84,1.05][this.bossPhase];
+
+      if(!this.bossAttacking){
+        // Move toward hero — stop at a respectful standoff distance
+        const targetY=Phaser.Math.Clamp(this.hero.y, this.bossMinY, this.bossMaxY);
+        if(bdist>280){
+          this.boss.x+=Math.sign(bdx)*move*spd;
+          this.boss.y+=(targetY-this.boss.y)*0.05;
+          this.boss.y=Phaser.Math.Clamp(this.boss.y,this.bossMinY,this.bossMaxY);
+          if(this.boss.anims.currentAnim?.key!=='boss-walk') this.boss.play('boss-walk',true);
+        } else {
+          if(this.boss.anims.currentAnim?.key!=='boss-idle') this.boss.play('boss-idle',true);
+        }
+
+        // Attack decision
+        if(bdist<320&&this.bossCooldown<=0){
+          this._bossDoAttack(bdist);
+        }
+      }
+    }
+
+    /* ── Boss HP bar pulse in rage ── */
+    if(this.bossPhase>=4 && !this.bossDefeated){
+      const pulse=0.85+Math.sin(time*0.008)*0.15;
+      this.bossHPBar.setAlpha(pulse);
+    }
+  }
+
+  _bossDoAttack(dist){
+    const phase=this.bossPhase;
+    let attackKey, cooldown, hitDelay, damage, hitRange;
+    const roll=Math.random();
+
+    // Phase 1: aggressive quick attacks, occasional strong
+    if(phase===1){
+      if(roll<0.65){
+        attackKey='boss-quick-attack'; hitDelay=80; damage=1; hitRange=320;
+        cooldown=Phaser.Math.Between(900,1400);
+      } else {
+        attackKey='boss-strong-attack'; hitDelay=260; damage=2; hitRange=360;
+        cooldown=Phaser.Math.Between(1400,2000);
+      }
+    // Phase 2: lots of quick, more strong, first dash
+    } else if(phase===2){
+      if(roll<0.40){
+        attackKey='boss-quick-attack'; hitDelay=70; damage=1; hitRange=320;
+        cooldown=Phaser.Math.Between(700,1100);
+      } else if(roll<0.70){
+        attackKey='boss-strong-attack'; hitDelay=220; damage=2; hitRange=370;
+        cooldown=Phaser.Math.Between(1100,1700);
+      } else {
+        attackKey='boss-dash-attack'; hitDelay=180; damage=2; hitRange=460;
+        cooldown=Phaser.Math.Between(1200,1800);
+      }
+    // Phase 3: very quick bursts, heavy dash use
+    } else if(phase===3){
+      if(roll<0.30){
+        attackKey='boss-quick-attack'; hitDelay=65; damage=1; hitRange=320;
+        cooldown=Phaser.Math.Between(800,1300);
+      } else if(roll<0.55){
+        attackKey='boss-strong-attack'; hitDelay=200; damage=2; hitRange=370;
+        cooldown=Phaser.Math.Between(1200,1800);
+      } else {
+        attackKey='boss-dash-attack'; hitDelay=160; damage=2; hitRange=440;
+        cooldown=Phaser.Math.Between(1200,1800);
+      }
+    // Phase 4 — RAGE: aggressive but survivable
+    } else {
+      if(roll<0.30){
+        attackKey='boss-quick-attack'; hitDelay=60; damage=1; hitRange=340;
+        cooldown=Phaser.Math.Between(600,1000);
+      } else if(roll<0.55){
+        attackKey='boss-strong-attack'; hitDelay=180; damage=2; hitRange=390;
+        cooldown=Phaser.Math.Between(900,1400);
+      } else {
+        attackKey='boss-dash-attack'; hitDelay=140; damage=3; hitRange=480;
+        cooldown=Phaser.Math.Between(800,1300);
+      }
+    }
+
+    this.bossAttacking=true;
+    this.bossCooldown=cooldown;
+    this.boss.play(attackKey,true);
+
+    // Dash: boss lunges hard — longer distance, faster in later phases
+    if(attackKey==='boss-dash-attack'){
+      const dashDist=[0,240,280,320,380][phase];
+      const dashDur=[0,220,190,160,130][phase];
+      const dashDest=Phaser.Math.Clamp(
+        this.boss.x+Math.sign(this.hero.x-this.boss.x)*dashDist,
+        80, this.scale.width-80
+      );
+      this.tweens.add({targets:this.boss,x:dashDest,duration:dashDur,ease:'Quad.In'});
+    }
+
+    // Multi-hit window for quick attack in rage: second hit chance
+    this.time.delayedCall(hitDelay,()=>{
+      if(this.bossDefeated||this.heroInvincible||this.gameOver) return;
+      const dx=Math.abs(this.hero.x-this.boss.x);
+      const dy=Math.abs(this.hero.y-this.boss.y);
+      if(dx<hitRange&&dy<240) this._damageHero(damage);
+    });
+    // Phase 4 quick attack no longer fires a second hit
+  }
+}
+
+/* =====================================================================
+   BOSS CLOSEUP SCENE  (4.5)
+   gdcs3 — Claudio confronts The Father face-to-face (several bubbles)
+   gdcs4 — The Father says "Got it." then "Good." 
+   Favor House Atlantic keeps playing throughout.
+   On complete → triggers boss end-dialogue (daughter begging) inside
+   BossFightScene via a shared callback stored on window.
+===================================================================== */
+class BossCloseupScene extends Phaser.Scene {
+  constructor(){ super({key:'BossCloseupScene'}); }
+
+  preload(){
+    if(!this.textures.exists('gdcs3')) this.load.image('gdcs3','assets/gdcs3.jpg');
+    if(!this.textures.exists('gdcs4')) this.load.image('gdcs4','assets/gdcs4.jpg');
+    if(!this.cache.audio.exists('favorhouse'))
+      this.load.audio('favorhouse','assets/A_Favor_house_atlantic_SNESremix.mp3');
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this._done=false;
+
+    // No music — favorhouse continues from GodderDamScene in the background (BossFightScene stopped it)
+    this._music=null;
+    this.events.once('shutdown',()=>{});
+
+    // ── Panel 1: gdcs3 ──
+    this._panel1=this.add.image(width/2,height/2,'gdcs3')
+      .setDisplaySize(width,height).setDepth(10).setAlpha(0);
+    // Slow Ken-Burns zoom: scale from 1.0 → 1.08 over entire panel duration
+    this.tweens.add({targets:this._panel1, scaleX:this._panel1.scaleX*1.08, scaleY:this._panel1.scaleY*1.08, duration:18000, ease:'Linear'});
+
+    // ── Panel 2: gdcs4 (pre-created, hidden) ──
+    this._panel2=this.add.image(width/2,height/2,'gdcs4')
+      .setDisplaySize(width,height).setDepth(10).setAlpha(0);
+
+    // ── Skip button ──
+    window.showSkipButton(this);
+    window._skipAction=()=>this._finish();
+
+    // Fade in panel 1 then run dialogue
+    this.cameras.main.fadeIn(600,0,0,0);
+    this.time.delayedCall(650,()=>this._runPanel1());
+  }
+
+  // ── PANEL 1: Claudio dialogue bubbles ──
+  _runPanel1(){
+    const lines=[
+      'From now on, you cherish\nthis child above all else.',
+      'And you are not going to be\nsatisfied with life here.\nOh no.',
+      'You are going to do everything\nhumanly possible to get her out\nof this hellhole and make a decent\nlife for you and her...\nbut mostly her.',
+      "You're going to be the father\nevery child deserves\nand wishes he or she had.",
+      'Get it?',
+    ];
+
+    // Fade in the image
+    this.tweens.add({targets:this._panel1,alpha:1,duration:500});
+
+    let idx=0;
+    const showNext=()=>{
+      if(this._done) return;
+      if(idx>=lines.length){
+        this._transitionToPanel2();
+        return;
+      }
+      this._showBubble(lines[idx],'CLAUDIO','left',()=>{
+        idx++;
+        showNext();
+      });
+    };
+    this.time.delayedCall(300,showNext);
+  }
+
+  // ── Transition to panel 2 ──
+  _transitionToPanel2(){
+    if(this._done) return;
+    window.hideSkipButton();
+    this._killBubble();
+    // Reset zoom for panel 2
+    const {width,height}=this.scale;
+    this._panel2.setDisplaySize(width,height);
+    this.tweens.add({targets:this._panel2, scaleX:this._panel2.scaleX*1.08, scaleY:this._panel2.scaleY*1.08, duration:12000, ease:'Linear'});
+
+    this.tweens.add({
+      targets:this._panel1, alpha:0, duration:1,
+      onComplete:()=>{
+        this._panel2.setAlpha(1);
+        window.showSkipButton(this);
+        window._skipAction=()=>this._finish();
+        this.time.delayedCall(400,()=>{
+          this._showBubble('Got it.','THE FATHER','right',()=>{
+            this.time.delayedCall(600,()=>{
+              this._showBubble('Good.','CLAUDIO','left',()=>{
+                this.time.delayedCall(800,()=>this._finish());
+              });
+            });
+          });
+        });
+      }
+    });
+  }
+
+  _finish(){
+    if(this._done) return;
+    this._done=true;
+    window.hideSkipButton();
+    this._killBubble();
+    this.cameras.main.fadeOut(800,0,0,0);
+    this.time.delayedCall(850,()=>{
+      if(typeof window._bossCloseupDone === 'function'){
+        // Normal gameplay: boss died → closeup → daughter walk-in → dialogue
+        const cb=window._bossCloseupDone;
+        window._bossCloseupDone=null;
+        this.scene.stop('BossCloseupScene');
+        cb();
+      } else {
+        // Dev menu "▶ 4.5" direct entry → skip to Level4CutsceneScene
+        if(this._music&&this._music.isPlaying) this._music.stop();
+        this.scene.start('Level4CutsceneScene');
+      }
+    });
+  }
+
+  // ── Shared bubble helper ──
+  // Bubble is centered horizontally, upper portion of screen.
+  // A speech tail points down-left (Claudio) or down-right (Father).
+  _showBubble(text, speaker, side, onDone){
+    this._killBubble();
+    const {width,height}=this.scale;
+    const pad=26, bubbleW=Math.min(700, width*0.58), lineH=32;
+    const nameH=34;
+    const rawLines=text.split('\n');
+    let totalLines=0;
+    rawLines.forEach(l=>totalLines+=Math.max(1,Math.ceil(l.length/Math.floor((bubbleW-pad*2)/13))));
+    const bubbleH=pad*2+nameH+totalLines*lineH+10;
+
+    // ── Center horizontally, anchor top at ~8% down ──
+    const bx=width/2;
+    const by=height*0.08+bubbleH;
+
+    // ── White box ──
+    const bg=this.add.rectangle(bx,by,bubbleW,bubbleH,0xffffff,0.96)
+      .setStrokeStyle(4,0x111111).setOrigin(0.5,1).setDepth(3000).setAlpha(0);
+
+    // ── Speech tail — points down toward speaker side ──
+    const tailBaseW=34, tailHeight=40;
+    // Base of tail sits on bottom edge of bubble; tip points further down+outward
+    const tailBaseX = side==='left' ? bx - bubbleW*0.28 : bx + bubbleW*0.28;
+    const tailTipX  = side==='left' ? tailBaseX - 52    : tailBaseX + 52;
+    const tailTipY  = by + tailHeight;
+    const tail=this.add.graphics().setDepth(2999).setAlpha(0);
+    tail.fillStyle(0xffffff, 0.96);
+    tail.fillTriangle(tailBaseX-tailBaseW/2, by, tailBaseX+tailBaseW/2, by, tailTipX, tailTipY);
+    tail.lineStyle(4, 0x111111, 1);
+    tail.strokeTriangle(tailBaseX-tailBaseW/2, by, tailBaseX+tailBaseW/2, by, tailTipX, tailTipY);
+    // Erase the top seam so tail blends into box
+    tail.lineStyle(8, 0xffffff, 1);
+    tail.lineBetween(tailBaseX-tailBaseW/2+3, by, tailBaseX+tailBaseW/2-3, by);
+
+    // ── Speaker name ──
+    const nameT=this.add.text(bx, by-bubbleH+pad, speaker+':',{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'17px',
+      fontStyle:'bold', color:'#222266', stroke:'#ffffff', strokeThickness:2
+    }).setOrigin(0.5,0).setDepth(3001).setAlpha(0);
+
+    // ── Body text — centered ──
+    const bodyT=this.add.text(bx, by-bubbleH+pad+nameH, text,{
+      fontFamily:'"Arial Black",Arial,sans-serif', fontSize:'21px',
+      fontStyle:'bold', color:'#111111', align:'center',
+      wordWrap:{width:bubbleW-pad*2}
+    }).setOrigin(0.5,0).setDepth(3001).setAlpha(0);
+
+    // ── NEXT button — bottom-right of box ──
+    const nextBtnW=110, nextBtnH=38;
+    const nbx=bx+bubbleW/2-nextBtnW/2-8, nby=by-8;
+    const nextBg=this.add.rectangle(nbx,nby,nextBtnW,nextBtnH,0x1155cc,0.95)
+      .setStrokeStyle(2,0xaaccff).setOrigin(0.5,1).setDepth(3002).setAlpha(0);
+    const nextT=this.add.text(nbx,nby-nextBtnH/2,'NEXT ›',{
+      fontFamily:'"Arial Black",Arial,sans-serif',fontSize:'16px',color:'#ffffff'
+    }).setOrigin(0.5,0.5).setDepth(3003).setAlpha(0);
+
+    this._bubble=[bg,tail,nameT,bodyT,nextBg,nextT];
+    this.tweens.add({targets:this._bubble,alpha:1,duration:200});
+
+    nextBg.setInteractive({useHandCursor:true});
+    nextT.setInteractive({useHandCursor:true});
+    const advance=()=>{
+      if(this._done) return;
+      this._killBubble();
+      onDone();
+    };
+    nextBg.once('pointerdown',advance);
+    nextT.once('pointerdown',advance);
+  }
+
+  _killBubble(){
+    if(this._bubble){
+      this._bubble.forEach(o=>{ if(o&&o.active) o.destroy(); });
+      this._bubble=null;
+    }
+  }
+}
+
+/* =====================================================================
+   LEVEL 4 CUTSCENE SCENE
+   Panel 1: gdcs2 (monster alley) — slow zoom in, dialogue bottom-left
+   Panel 2: gdcs1 (blonde angel)  — slow zoom in, dialogue top-left
+===================================================================== */
+class Level4CutsceneScene extends Phaser.Scene {
+  constructor(){ super({key:'Level4CutsceneScene'}); }
+
+  preload(){
+    this.load.image('gdcs1','assets/gdcs1.png');
+    this.load.image('gdcs2','assets/gdcs2.png');
+    if(!this.cache.audio.exists('crowing'))
+      this.load.audio('crowing','assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3');
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.cameras.main.setBackgroundColor('#000000');
+    // Stop every sound unconditionally before starting crowing
+    this.sound.getAll().forEach(s=>s.stop());
+    // Crowing is already playing from BossFightScene — just track it and nudge volume
+    this._music=this.sound.get('crowing')||null;
+    if(this._music&&this._music.isPlaying){
+      this.tweens.add({targets:this._music, volume:0.7, duration:1000});
+    } else {
+      // Fallback if arriving directly (e.g. dev menu)
+      if(!this.cache.audio.exists('crowing'))
+        this.load.audio('crowing','assets/The_Crowing_8_Bit_Coheed_www_youtube_com_DominicPeppiatt.mp3');
+      this._music=this.sound.add('crowing',{loop:false, volume:0});
+      this._music.play({seek:278});
+      this.tweens.add({targets:this._music, volume:0.7, duration:2000});
+    }
+    this._runPanel1();
+  }
+
+  // ── Shared helpers ──────────────────────────────────────────────
+
+  _makeDialogueBox(text, x, y, maxW){
+    const pad=22;
+    const style={
+      fontFamily:'"Arial Black",Arial,sans-serif',
+      fontSize:'clamp(18px,2.8vw,32px)',   // handled via Phaser font size string
+      fontSize:'28px',
+      fontStyle:'bold',
+      color:'#ffffff',
+      stroke:'#000000',
+      strokeThickness:5,
+      wordWrap:{width:maxW-pad*2},
+      align:'left',
+      lineSpacing:6
+    };
+    // Measure with temp text to size bg rect
+    const tmp=this.add.text(0,-9999,text,style);
+    const tw=tmp.width+pad*2;
+    const th=tmp.height+pad*2;
+    tmp.destroy();
+
+    const bg=this.add.rectangle(x,y,tw,th,0x000000,0.72)
+      .setOrigin(0,0)
+      .setStrokeStyle(3,0xffffff,0.7)
+      .setDepth(500);
+    const txt=this.add.text(x+pad, y+pad, text, style)
+      .setOrigin(0,0)
+      .setDepth(501);
+
+    // Fade in
+    [bg,txt].forEach(o=>{ o.setAlpha(0); this.tweens.add({targets:o,alpha:1,duration:400,delay:200}); });
+    return [bg,txt];
+  }
+
+  _destroyBox(objs){
+    objs.forEach(o=>this.tweens.add({targets:o,alpha:0,duration:300,onComplete:()=>o.destroy()}));
+  }
+
+  _waitForTap(minDelay, cb){
+    // After minDelay ms, next tap OR auto-advance at 5s advances
+    this.time.delayedCall(minDelay,()=>{
+      let done=false;
+      const go=()=>{ if(done) return; done=true; this.input.off('pointerdown',go); cb(); };
+      this.input.once('pointerdown',go);
+      this.time.delayedCall(10000,go);
+    });
+  }
+
+  // ── Panel 1: gdcs1 (angel) ──
+  _runPanel1(){
+    const {width,height}=this.scale;
+
+    const img=this.add.image(width/2, height/2, 'gdcs1').setDepth(10);
+    const coverScale=Math.max(width/img.width, height/img.height);
+    img.setScale(coverScale);
+
+    this.cameras.main.fadeIn(800,0,0,0);
+
+    // Subtle zoom: 8% over 14 seconds
+    this.tweens.add({
+      targets:img,
+      scaleX:coverScale*1.08,
+      scaleY:coverScale*1.08,
+      duration:14000,
+      ease:'Sine.InOut'
+    });
+
+    const bx=width*0.20;
+    const by=40;
+    const boxMaxW=Math.min(680, width*0.52);
+    const boxObjs=this._makeDialogueBox(
+      '"Or at least...\nthat\'s what I thought."',
+      bx, by, boxMaxW
+    );
+
+    const doSkip=()=>{
+      window.hideSkipButton();
+      this._destroyBox(boxObjs);
+      img.destroy();
+      this.cameras.main.fadeOut(500,0,0,0);
+      this.time.delayedCall(520,()=>{ this.scene.start('PriestFightScene'); });
+    };
+    window.showSkipButton(this);
+    window._skipAction=doSkip;
+
+    this._waitForTap(2400,()=>{
+      window.hideSkipButton();
+      this._destroyBox(boxObjs);
+      this.cameras.main.fadeOut(700,0,0,0);
+      this.time.delayedCall(750,()=>{
+        img.destroy();
+        this._runPanel2();
+      });
+    });
+  }
+
+  // ── Panel 2: gdcs2 (monster alley) ──
+  _runPanel2(){
+    const {width,height}=this.scale;
+
+    const img=this.add.image(width/2, height/2, 'gdcs2').setDepth(10);
+    const coverScale=Math.max(width/img.width, height/img.height);
+    img.setScale(coverScale);
+
+    this.cameras.main.fadeIn(800,0,0,0);
+
+    this.tweens.add({
+      targets:img,
+      scaleX:coverScale*1.08,
+      scaleY:coverScale*1.08,
+      duration:14000,
+      ease:'Sine.InOut'
+    });
+
+    const bx=width*0.20;
+    const by=40;
+    const boxMaxW=Math.min(700, width*0.52);
+    const boxObjs=this._makeDialogueBox(
+      '"Turns out there were\nangels after all..."',
+      bx, by, boxMaxW
+    );
+
+    const doSkip=()=>{
+      window.hideSkipButton();
+      this._destroyBox(boxObjs);
+      img.destroy();
+      this.cameras.main.fadeOut(500,0,0,0);
+      this.time.delayedCall(520,()=>{ this.scene.start('PriestFightScene'); });
+    };
+    window.showSkipButton(this);
+    window._skipAction=doSkip;
+
+    this._waitForTap(2400,()=>{
+      window.hideSkipButton();
+      this._destroyBox(boxObjs);
+      // Don't stop music — let it carry into PriestFightScene
+      this.cameras.main.fadeOut(900,0,0,0);
+      this.time.delayedCall(950,()=>{
+        this.scene.start('PriestFightScene');
+      });
+    });
+  }
+}
+
+
+/* =====================================================================
+   PRIEST FIGHT SCENE
+   Ambellina (player) vs The Priest (boss) — 1v1 on Godder Dam street
+===================================================================== */
+class PriestFightScene extends Phaser.Scene {
+  constructor(){ super({key:'PriestFightScene'}); }
+
+  preload(){
+    // Backgrounds — already loaded by GodderDamScene if arriving normally;
+    // guard with exists checks so we don't double-load
+    const L=this.load;
+    if(!this.textures.exists('gd1'))     L.image('gd1',    'assets/bg/gd1.png');
+    if(!this.textures.exists('gd2'))     L.image('gd2',    'assets/bg/gd2.png');
+    if(!this.textures.exists('gd3'))     L.image('gd3',    'assets/bg/gd3.png');
+    if(!this.textures.exists('gdalley')) L.image('gdalley','assets/bg/gdalley.png');
+    if(!this.cache.audio.exists('favorhouse'))
+      L.audio('favorhouse','assets/A_Favor_house_atlantic_SNESremix.mp3');
+    // Ambellina sprites
+    L.spritesheet('am_idle',      'assets/ambellina/idle.png',      {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_walk',      'assets/ambellina/walk.png',      {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_attack1',   'assets/ambellina/attack1.png',   {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_attack2',   'assets/ambellina/attack2.png',   {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_attack3',   'assets/ambellina/attack3.png',   {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_knockback', 'assets/ambellina/knockback.png', {frameWidth:124,frameHeight:154});
+    L.spritesheet('am_death',     'assets/ambellina/death.png',     {frameWidth:124,frameHeight:154});
+    // Priest sprites
+    L.spritesheet('pr_idle',      'assets/priest/idle.png',      {frameWidth:165,frameHeight:195});
+    L.spritesheet('pr_walk',      'assets/priest/walk.png',      {frameWidth:165,frameHeight:195});
+    L.spritesheet('pr_attack',    'assets/priest/attack.png',    {frameWidth:165,frameHeight:195});
+    L.spritesheet('pr_dashattack','assets/priest/dashattack.png',{frameWidth:165,frameHeight:195});
+    L.spritesheet('pr_knockback', 'assets/priest/knockback.png', {frameWidth:165,frameHeight:195});
+    L.spritesheet('pr_death',     'assets/priest/death.png',     {frameWidth:165,frameHeight:195});
+    // Combo pop sprites
+    if(!this.textures.exists('combo3x')) L.spritesheet('combo3x','assets/combo/combo3x.png',{frameWidth:128,frameHeight:128});
+    if(!this.textures.exists('combo6x')) L.spritesheet('combo6x','assets/combo/combo6x.png',{frameWidth:128,frameHeight:128});
+  }
+
+  create(){
+    const {width,height}=this.scale;
+    this.gameOver=false;
+    this.priestDefeated=false;
+    this.speed=300;
+
+    // ── Background (single screen, no scroll) ──
+    const bgW_src=1536, bgH_src=1024, artTop=288, artBot=708;
+    const artH=artBot-artTop;
+    const bgScale=height/artH;
+    const scaledW=bgW_src*bgScale;
+    const scaledH=bgH_src*bgScale;
+    const bgY=-(artTop*bgScale);
+    // Use gd3 + gdalley side by side to fill the width
+    ['gd3','gdalley'].forEach((key,i)=>{
+      this.add.image(i*scaledW, bgY, key)
+        .setOrigin(0,0).setDisplaySize(scaledW,scaledH).setDepth(0);
+    });
+    this.add.rectangle(0,0,width*2,height,0x000000,0.15).setOrigin(0,0).setDepth(1);
+
+    // ── Y bounds ──
+    this.heroMinY=height*0.848;
+    this.heroMaxY=height*0.923;
+
+    // ── Music — inherit crowing from Level4CutsceneScene if already playing ──
+    const _existing=this.sound.get('crowing');
+    if(_existing&&_existing.isPlaying){
+      this._music=_existing;
+      this.tweens.add({targets:this._music, volume:0.7, duration:500});
+    } else {
+      // Fallback for dev-menu direct entry
+      this.sound.getAll().forEach(s=>{ if(s.isPlaying) s.stop(); });
+      this._music=this.sound.add('crowing',{loop:false,volume:0});
+      this._music.play({seek:278});
+      this.tweens.add({targets:this._music,volume:0.7,duration:1500});
+    }
+    this.events.once('shutdown',()=>{ if(this._music?.isPlaying) this._music.stop(); });
+
+    // ── Animations ──
+    const A=this.anims;
+    const _c=(cfg)=>{ if(!A.exists(cfg.key)) A.create(cfg); };
+    // Ambellina
+    _c({key:'am-idle',      frames:A.generateFrameNumbers('am_idle',      {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'am-walk',      frames:A.generateFrameNumbers('am_walk',      {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'am-attack1',   frames:A.generateFrameNumbers('am_attack1',   {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'am-attack2',   frames:A.generateFrameNumbers('am_attack2',   {start:0,end:24}), frameRate:22, repeat:0});
+    _c({key:'am-attack3',   frames:A.generateFrameNumbers('am_attack3',   {start:0,end:24}), frameRate:20, repeat:0});
+    _c({key:'am-knockback', frames:A.generateFrameNumbers('am_knockback', {start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'am-death',     frames:A.generateFrameNumbers('am_death',     {start:0,end:15}), frameRate:10, repeat:0});
+    // Priest
+    _c({key:'pr-idle',       frames:A.generateFrameNumbers('pr_idle',       {start:0,end:15}), frameRate:8,  repeat:-1});
+    _c({key:'pr-walk',       frames:A.generateFrameNumbers('pr_walk',       {start:0,end:15}), frameRate:10, repeat:-1});
+    _c({key:'pr-attack',     frames:A.generateFrameNumbers('pr_attack',     {start:0,end:15}), frameRate:22, repeat:0});
+    _c({key:'pr-dashattack', frames:A.generateFrameNumbers('pr_dashattack', {start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'pr-knockback',  frames:A.generateFrameNumbers('pr_knockback',  {start:0,end:15}), frameRate:14, repeat:0});
+    _c({key:'pr-death',      frames:A.generateFrameNumbers('pr_death',      {start:0,end:15}), frameRate:10, repeat:0});
+    _c({key:'combo-3x', frames:A.generateFrameNumbers('combo3x',{start:0,end:15}), frameRate:18, repeat:0});
+    _c({key:'combo-6x', frames:A.generateFrameNumbers('combo6x',{start:0,end:15}), frameRate:18, repeat:0});
+
+    // ── Combo counter ──
+    this._comboHits=0;
+    this._comboTimer=null;
+    this._comboSprite=null;
+
+    // ── Ambellina (player) ──
+    this.heroFacing=1;
+    this.isAttacking=false;
+    this.isKnockedBack=false;
+    this.heroInvincible=false;
+    this.heroHealth=12;
+    this._strStep=0; this._strBuffered=false; this._chainingNow=false; this._strTimer=null;
+
+    const heroY=this.heroMaxY;
+    this.hero=this.add.sprite(width*0.22, heroY,'am_idle')
+      .setScale(3.5).setDepth(50).setOrigin(0.5,1);
+    this.hero.play('am-idle');
+
+    const _onJabCross=()=>{
+      if(this._chainingNow) return;
+      this.isAttacking=false;
+      if(this._strBuffered){ this._strBuffered=false; this._fireStringStep(); }
+      else { this._strStep=0; if(!this.gameOver) this.hero.play('am-idle',true); }
+    };
+    this.hero.on('animationcomplete-am-attack1',_onJabCross);
+    this.hero.on('animationcomplete-am-attack2',_onJabCross);
+    this.hero.on('animationcomplete-am-attack3',()=>{
+      this.isAttacking=false; this._strStep=0; this._strBuffered=false;
+      if(this._strTimer){ this._strTimer.remove(); this._strTimer=null; }
+      if(!this.gameOver) this.hero.play('am-idle',true);
+    });
+    this.hero.on('animationcomplete-am-knockback',()=>{
+      this.isKnockedBack=false;
+      if(!this.gameOver) this.hero.play('am-idle',true);
+    });
+
+    // ── HP bars ──
+    const BAR_W=22,BAR_H=12,BAR_GAP=3;
+    this.add.text(20,14,'AMBELLINA',{fontFamily:'Arial Black',fontSize:'26px',color:'#ffccff',stroke:'#000',strokeThickness:4}).setScrollFactor(0).setDepth(1000);
+    this.add.text(20,50,'HP',{fontFamily:'Arial',fontSize:'14px',color:'#ffaaff'}).setScrollFactor(0).setDepth(1000);
+    this.heroHealthBars=[];
+    for(let i=0;i<12;i++) this.heroHealthBars.push(
+      this.add.rectangle(54+i*(BAR_W+BAR_GAP),57,BAR_W,BAR_H,0xdd44dd).setScrollFactor(0).setDepth(1000)
+    );
+
+    // ── Priest (boss) ──
+    this.priestHP=30;
+    this.priestMaxHP=30;
+    this.priestAttacking=false;
+    this.priestKnockedBack=false;
+    this.priestInvincible=false;
+    this.priestCooldown=800;
+    this._hitPriestThisSwing=false;
+    this.PRIEST_SCALE=4.5; // 3.0 * 1.5
+
+    this.priest=this.add.sprite(width*0.72, heroY,'pr_idle')
+      .setScale(this.PRIEST_SCALE).setDepth(50).setOrigin(0.5,1);
+    this.priest.setFlipX(true); // faces left toward player
+    this.priest.play('pr-idle');
+
+    this.priest.on('animationcomplete-pr-attack',()=>{
+      this.priestAttacking=false;
+      if(!this.priestDefeated) this.priest.play('pr-idle',true);
+    });
+    this.priest.on('animationcomplete-pr-dashattack',()=>{
+      this.priestAttacking=false;
+      if(!this.priestDefeated) this.priest.play('pr-idle',true);
+    });
+    this.priest.on('animationcomplete-pr-knockback',()=>{
+      if(!this._prKbTween){ this.priestKnockedBack=false; if(!this.priestDefeated) this.priest.play('pr-idle',true); }
+      this.priest.setScale(this.PRIEST_SCALE);
+    });
+
+    // Priest HP bar (top center)
+    this.add.text(width/2,18,'THE PRIEST',{fontFamily:'Arial Black',fontSize:'26px',color:'#ffaa44',stroke:'#000',strokeThickness:4}).setOrigin(0.5,0).setScrollFactor(0).setDepth(1000);
+    const prBarBg=this.add.rectangle(width/2,52,440,18,0x330000).setScrollFactor(0).setDepth(1000);
+    this.priestHPBar=this.add.rectangle(width/2,52,440,18,0xff6600).setOrigin(0.5).setScrollFactor(0).setDepth(1001);
+
+    // ── Camera ── static, no follow
+    this.cameras.main.setBackgroundColor('#111111');
+    this.cameras.main.fadeIn(600,0,0,0);
+
+    // ── Input ──
+    this.cursors=this.input.keyboard.createCursorKeys();
+    this.attackKey=this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.F);
+    if(window.IS_MOBILE) window.initMobileControls(this);
+  }
+
+  update(_t,delta){
+    if(this.gameOver||this.priestDefeated) return;
+    const {width,height}=this.scale;
+    const move=(this.speed*delta)/1000;
+
+    // ── Player movement ──
+    const _L=this.cursors.left.isDown  ||(window.IS_MOBILE&&window.VPAD.left);
+    const _R=this.cursors.right.isDown ||(window.IS_MOBILE&&window.VPAD.right);
+    const _U=this.cursors.up.isDown    ||(window.IS_MOBILE&&window.VPAD.up);
+    const _D=this.cursors.down.isDown  ||(window.IS_MOBILE&&window.VPAD.down);
+
+    let moving=false;
+    if(!this.isAttacking&&!this.isKnockedBack){
+      if(_L){ this.hero.x-=move; this.heroFacing=-1; this.hero.setFlipX(true);  moving=true; }
+      if(_R){ this.hero.x+=move; this.heroFacing=1;  this.hero.setFlipX(false); moving=true; }
+      if(_U){ this.hero.y-=move*0.5; moving=true; }
+      if(_D){ this.hero.y+=move*0.5; moving=true; }
+      this.hero.x=Phaser.Math.Clamp(this.hero.x,120,width-120);
+      this.hero.y=Phaser.Math.Clamp(this.hero.y,this.heroMinY,this.heroMaxY);
+
+      if(moving){ if(this.hero.anims.currentAnim?.key!=='am-walk') this.hero.play('am-walk',true); }
+      else       { if(this.hero.anims.currentAnim?.key!=='am-idle') this.hero.play('am-idle',true); }
+    }
+
+    // ── Attack input ──
+    const _atkNow=window.IS_MOBILE
+      ? (()=>{ const q=window.VPAD_QUEUE[0]; if(q==='attack'||q==='two_punch'){ window.VPAD_QUEUE.shift(); return true; } return false; })()
+      : Phaser.Input.Keyboard.JustDown(this.attackKey);
+
+    if(_atkNow&&!this.gameOver){
+      if(!this.isAttacking){ this._fireStringStep(); }
+      else if(this.isAttacking&&!this._strBuffered){ this._strBuffered=true; }
+    }
+
+    // ── Priest AI ──
+    if(!this.priestKnockedBack&&!this.priestDefeated){
+      this.priestCooldown-=delta;
+      const dx=this.hero.x-this.priest.x;
+      const xDist=Math.abs(dx);
+      this.priest.setFlipX(this.priest.x>this.hero.x);
+
+      // Phase: 1(10-7) 2(7-4) 3(4-2) 4(2-0)
+      const phase=this.priestHP>22?1:this.priestHP>14?2:this.priestHP>7?3:4;
+      const spdMult=[0,0.72,0.90,1.10,1.35][phase];
+      const STANDOFF=[0,320,300,280,260][phase];
+      const dashChance=[0,0.25,0.35,0.45,0.55][phase];
+      const atkRange=[0,340,360,380,400][phase];
+
+      // Move toward hero
+      if(!this.priestAttacking){
+        const toHeroX=this.hero.x+(dx<0?STANDOFF:-STANDOFF);
+        const towardX=toHeroX-this.priest.x;
+        if(Math.abs(towardX)>20){
+          this.priest.x+=Math.sign(towardX)*move*spdMult;
+          if(this.priest.anims.currentAnim?.key!=='pr-walk') this.priest.play('pr-walk',true);
+        } else {
+          if(this.priest.anims.currentAnim?.key!=='pr-idle') this.priest.play('pr-idle',true);
+        }
+      }
+
+      // Move toward hero Y
+      this.priest.y+=(this.hero.y-this.priest.y)*0.10;
+      this.priest.y=Phaser.Math.Clamp(this.priest.y,this.heroMinY,this.heroMaxY);
+      this.priest.x=Phaser.Math.Clamp(this.priest.x,120,width-120);
+
+      // Hard minimum separation — push priest out if too close
+      const MIN_SEP=160;
+      const sepDx=this.priest.x-this.hero.x;
+      if(Math.abs(sepDx)<MIN_SEP){
+        const pushDir=sepDx===0?1:Math.sign(sepDx);
+        this.priest.x=this.hero.x+pushDir*MIN_SEP;
+        this.priest.x=Phaser.Math.Clamp(this.priest.x,120,width-120);
+      }
+
+      if(!this.priestAttacking&&xDist<atkRange&&this.priestCooldown<=0){
+        const useDash=xDist>120&&Math.random()<dashChance;
+        const cooldownMin=[0,650,500,380,260][phase];
+        const cooldownMax=[0,1100,900,700,520][phase];
+        if(useDash){
+          this.priestAttacking=true;
+          this.priestCooldown=Phaser.Math.Between(cooldownMin,cooldownMax);
+          this.priest.play('pr-dashattack',true);
+          const dashDir=this.priest.x>this.hero.x?-1:1;
+          const dashDist=[0,240,280,320,380][phase];
+          this.tweens.add({targets:this.priest,x:this.priest.x+dashDir*dashDist,duration:[0,240,210,180,150][phase],ease:'Quad.In'});
+          const dashHitDelay=[0,300,260,220,190][phase];
+          this.time.delayedCall(dashHitDelay,()=>{ this._tryPriestHit([0,360,390,420,460][phase]); });
+        } else {
+          this.priestAttacking=true;
+          this.priestCooldown=Phaser.Math.Between(cooldownMin,cooldownMax);
+          this.priest.play('pr-attack',true);
+          const hitDelay=[0,180,160,140,120][phase];
+          this.time.delayedCall(hitDelay,()=>{ this._tryPriestHit([0,300,320,340,360][phase]); });
+        }
+      }
+    }
+  }
+
+  _tryPriestHit(range){
+    if(this.heroInvincible||this.gameOver) return;
+    const dx=Math.abs(this.hero.x-this.priest.x);
+    const dy=Math.abs(this.hero.y-this.priest.y);
+    if(dx<range&&dy<120) this._damageHero();
+  }
+
+  _damageHero(){
+    if(this.heroInvincible||this.gameOver) return;
+    this.heroHealth--;
+    if(this.heroHealth>=0) this.heroHealthBars[this.heroHealth]?.setFillStyle(0x333333);
+    this.cameras.main.shake(180,0.012);
+    this.hero.setTint(0xff3333);
+    this.time.delayedCall(80,()=>this.hero.clearTint());
+    if(this.heroHealth<=0){ this._triggerDeath(); return; }
+    this.isKnockedBack=true; this.isAttacking=false; this.heroInvincible=true;
+    this.hero.play('am-knockback',true);
+    const kbDir=this.heroFacing*-1;
+    this.tweens.add({targets:this.hero,x:this.hero.x+kbDir*55,duration:180,ease:'Sine.Out'});
+    this.time.delayedCall(800,()=>{ this.isKnockedBack=false; });
+    if(this._invincFlash) this._invincFlash.stop();
+    this._invincFlash=this.tweens.add({targets:this.hero,alpha:0.25,duration:120,yoyo:true,repeat:-1});
+    if(this._invincTimer) this._invincTimer.remove();
+    this._invincTimer=this.time.delayedCall(1800,()=>{
+      this.heroInvincible=false;
+      if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+      this.hero.setAlpha(1);
+    });
+  }
+
+  _triggerDeath(){
+    if(this.gameOver) return;
+    this.gameOver=true;
+    if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+    this.hero.setAlpha(1);
+    this.hero.play('am-death',true);
+    this.cameras.main.shake(600,0.022);
+    const {width,height}=this.scale;
+    this.time.delayedCall(1200,()=>{
+      this._goRect=this.add.rectangle(width/2,height/2,width,height,0x000000,0.78).setScrollFactor(0).setDepth(2000);
+      this._goText=this.add.text(width/2,height*0.32,'GAME OVER',{fontFamily:'Arial Black',fontSize:'88px',color:'#ff2222',stroke:'#000000',strokeThickness:8}).setOrigin(0.5).setScrollFactor(0).setDepth(2001);
+      this.game.canvas.style.pointerEvents='none';
+      const overlay=document.createElement('div');
+      overlay.id='pfGameOver';
+      overlay.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:24px;z-index:9999;pointer-events:none';
+      const mkBtn=(label,bg,cb)=>{
+        const b=document.createElement('button');
+        b.textContent=label;
+        b.style.cssText=`background:${bg};color:#fff;font-family:Arial Black,sans-serif;font-size:clamp(20px,3.5vw,40px);font-weight:900;padding:16px 50px;border:4px solid #fff;border-radius:12px;cursor:pointer;pointer-events:auto;touch-action:manipulation;text-shadow:2px 2px 0 #000;box-shadow:0 6px 0 rgba(0,0,0,0.5);min-width:240px;letter-spacing:2px`;
+        b.addEventListener('pointerdown',cb,{passive:false});
+        return b;
+      };
+      const cleanup=()=>{
+        document.getElementById('pfGameOver')?.remove();
+        this.game.canvas.style.pointerEvents='';
+        this._goRect?.destroy(); this._goText?.destroy();
+      };
+      overlay.appendChild(mkBtn('CONTINUE','#1a7a1a',()=>{ cleanup(); this._doContinue(); }));
+      overlay.appendChild(mkBtn('RETRY','#8a1a1a',()=>{ cleanup(); if(this._music?.isPlaying) this._music.stop(); this.scene.restart(); }));
+      document.body.appendChild(overlay);
+      this.events.once('shutdown',()=>{ document.getElementById('pfGameOver')?.remove(); this.game.canvas.style.pointerEvents=''; });
+    });
+  }
+
+  _doContinue(){
+    this.gameOver=false;
+    this.heroHealth=12;
+    this.heroHealthBars.forEach(b=>b.setFillStyle(0xdd44dd));
+    this.isAttacking=false; this.isKnockedBack=false;
+    this._strStep=0; this._strBuffered=false;
+    if(this._strTimer){ this._strTimer.remove(); this._strTimer=null; }
+    if(this._invincTimer){ this._invincTimer.remove(); this._invincTimer=null; }
+    if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+    const {width}=this.scale;
+    this.hero.setPosition(width*0.22, this.heroMaxY).setAlpha(1);
+    this.hero.play('am-idle',true);
+    this.heroInvincible=true;
+    this._invincFlash=this.tweens.add({targets:this.hero,alpha:0.3,duration:150,yoyo:true,repeat:-1});
+    this._invincTimer=this.time.delayedCall(3000,()=>{
+      this.heroInvincible=false;
+      if(this._invincFlash){ this._invincFlash.stop(); this._invincFlash=null; }
+      this.hero.setAlpha(1);
+    });
+  }
+
+  _fireStringStep(){
+    if(this._strStep>=3) this._strStep=0;
+    this._strStep++;
+    const step=this._strStep;
+    this.isAttacking=true;
+    this._strBuffered=false;
+    // Snap to face the priest before the attack plays
+    const facingPriest=this.priest.x>this.hero.x?1:-1;
+    this.heroFacing=facingPriest;
+    this.hero.setFlipX(facingPriest===-1);
+    this.hero.x+=this.heroFacing*(this.scale.width*0.10);
+    if(this._strTimer) this._strTimer.remove();
+    this._strTimer=this.time.delayedCall(500,()=>{ this._strStep=0; this._strTimer=null; });
+    if(step===3){
+      this.hero.play('am-attack3',true);
+      this._hitPriestThisSwing=false;
+      this.time.delayedCall(140,()=>this._checkHits(step));
+      this.time.delayedCall(333,()=>{ this._hitPriestThisSwing=false; this._checkHits(step); });
+      this.time.delayedCall(1200,()=>{ if(this.isAttacking) this.isAttacking=false; });
+    } else {
+      const key=step===1?'am-attack1':'am-attack2';
+      this.hero.play(key,true);
+      this._hitPriestThisSwing=false;
+      const hitDelay=step===1?208:375;
+      this.time.delayedCall(hitDelay,()=>this._checkHits(step));
+      this.time.delayedCall(400,()=>{
+        if(this._strBuffered&&this.isAttacking){
+          this._strBuffered=false; this._chainingNow=true;
+          this.hero.anims.stop(); this.isAttacking=false;
+          this._fireStringStep(); this._chainingNow=false;
+        }
+      });
+    }
+  }
+
+  _checkHits(step){
+    if(!this.isAttacking||this.priestDefeated||this.priestInvincible) return;
+    if(this._hitPriestThisSwing) return;
+    const RANGE=step===3?260:220, VERT=130;
+    const dx=(this.priest.x-this.hero.x)*this.heroFacing;
+    const dy=Math.abs(this.priest.y-this.hero.y);
+    if(dx>0&&dx<RANGE&&dy<VERT){
+      this._hitPriestThisSwing=true;
+      const dmg=step===3?2:1;
+      this.priestHP=Math.max(0,this.priestHP-dmg);
+      // Update HP bar
+      this.priestHPBar.setDisplaySize(440*(this.priestHP/this.priestMaxHP),18);
+      // Red flash
+      this.priest.setTint(0xff0000);
+      this.time.delayedCall(120,()=>{ if(this.priest.active) this.priest.clearTint(); });
+      // Hitstop
+      // ── Combo tracking ──
+      this._comboHits++;
+      if(this._comboTimer) this._comboTimer.remove();
+      this._comboTimer=this.time.delayedCall(1400,()=>{ this._comboHits=0; this._comboTimer=null; });
+      if(this._comboHits===3) this._showCombo('combo-3x');
+      else if(this._comboHits===6) this._showCombo('combo-6x');
+      this.hero.anims.pause();
+      this.time.delayedCall(55,()=>{ if(!this.gameOver) this.hero.anims.resume(); });
+      this.cameras.main.shake(75,0.009);
+      if(this.priestHP<=0){ this._killPriest(); return; }
+      // Knockback — all hits push back, finisher launches
+      const isFinisher=step===3;
+      this.priestAttacking=false;
+      this.priestKnockedBack=true;
+      if(this._prKbTween){ this._prKbTween.stop(); this._prKbTween=null; }
+      this.priest.setScale(this.PRIEST_SCALE*0.88);
+      this.priest.play('pr-knockback',true);
+      if(isFinisher){
+        const snap=this.priest.x+this.heroFacing*140;
+        const skid=snap+this.heroFacing*200;
+        this._prKbTween=this.tweens.add({targets:this.priest,x:snap,duration:90,ease:'Cubic.Out',
+          onComplete:()=>{
+            this._prKbTween=this.tweens.add({targets:this.priest,x:skid,duration:320,ease:'Quad.Out',
+              onComplete:()=>{ this._prKbTween=null; this.priest.setScale(this.PRIEST_SCALE); this.priestKnockedBack=false; if(!this.priestDefeated) this.priest.play('pr-idle',true); }
+            });
+          }
+        });
+      } else {
+        // Jab/cross: solid push, no skid
+        this._prKbTween=this.tweens.add({targets:this.priest,x:this.priest.x+this.heroFacing*100,duration:130,ease:'Cubic.Out',
+          onComplete:()=>{ this._prKbTween=null; this.priest.setScale(this.PRIEST_SCALE); this.priestKnockedBack=false; if(!this.priestDefeated) this.priest.play('pr-idle',true); }
+        });
+      }
+    }
+  }
+
+  _showCombo(animKey){
+    const {width,height}=this.scale;
+    // Kill any existing combo sprite
+    if(this._comboSprite&&this._comboSprite.active){
+      this._comboSprite.destroy();
+      this._comboSprite=null;
+    }
+    // Spawn above and slightly ahead of Ambellina
+    const sx=this.hero.x + this.heroFacing*120;
+    const sy=this.hero.y - this.hero.displayHeight - 20;
+    const spr=this.add.sprite(sx, sy, animKey==='combo-3x'?'combo3x':'combo6x')
+      .setScale(2.8).setDepth(500).setOrigin(0.5,1).setAlpha(0);
+    spr.play(animKey);
+    this._comboSprite=spr;
+    // Fade in fast, then fade out after anim completes
+    this.tweens.add({targets:spr, alpha:1, duration:80});
+    spr.once('animationcomplete',()=>{
+      if(!spr.active) return;
+      this.tweens.add({targets:spr, alpha:0, duration:250, onComplete:()=>{ if(spr.active) spr.destroy(); if(this._comboSprite===spr) this._comboSprite=null; }});
+    });
+  }
+
+  _killPriest(){
+    if(this.priestDefeated) return;
+    this.priestDefeated=true;
+    this.priestKnockedBack=true;
+    if(this._prKbTween){ this._prKbTween.stop(); this._prKbTween=null; }
+    this.cameras.main.shake(250,0.022);
+    const snap=this.priest.x+this.heroFacing*180;
+    const skid=snap+this.heroFacing*380;
+    this.priest.setScale(this.PRIEST_SCALE*0.88);
+    this.priest.play('pr-knockback',true);
+    this.tweens.add({targets:this.priest,x:snap,duration:80,ease:'Cubic.Out',
+      onComplete:()=>{ this.tweens.add({targets:this.priest,x:skid,duration:500,ease:'Quad.Out'}); }
+    });
+    this.time.delayedCall(180,()=>{
+      if(!this.priest.active) return;
+      this.priest.setScale(this.PRIEST_SCALE);
+      this.priest.play('pr-death',true);
+      this.priest.once('animationcomplete-pr-death',()=>{
+        this.priest.anims.stop(); this.priest.setFrame(15); this.priest.setDepth(1);
+        const {width,height}=this.scale;
+        this.time.delayedCall(1200,()=>{
+          this.cameras.main.fadeOut(900,0,0,0);
+          this.time.delayedCall(950,()=>{
+            if(this._music?.isPlaying) this._music.stop();
+            this.scene.start('TitleScene');
+          });
+        });
+      });
+    });
+  }
+}
+
 new Phaser.Game({
   type:Phaser.AUTO, width:1920, height:1080, pixelArt:true,
   scale:{mode:Phaser.Scale.FIT,autoCenter:Phaser.Scale.CENTER_BOTH},
-  input:{ activePointers:3 },
-  scene:[TitleScene,ClaudioScene,CloseupScene,Street3Scene,GameScene]
+  input:{ activePointers:3, keyboard:true },
+  disableContextMenu: true,
+  canvasStyle: 'display:block;outline:none;',
+  scene:[TitleScene,ClaudioScene,CloseupScene,Street3Scene,GameScene,GodderDamScene,BossFightScene,BossCloseupScene,Level4CutsceneScene,PriestFightScene]
 });
 </script>
 
